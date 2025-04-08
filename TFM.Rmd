@@ -1,0 +1,1134 @@
+---
+title: "TFM"
+author: "Diana Campos López"
+date: "2025-03-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dependencies
+
+```{r, library, message=FALSE, warning=FALSE}
+library(maftools)
+library(ggplot2)
+#library(forcats)
+#library(xlsx)
+library(dplyr)
+library(GenomicRanges)
+# library(BSgenome.Hsapiens.UCSC.hg19)
+#library(NMF)
+#library(pheatmap)
+library(data.table)
+# library(enrichR)
+#library(paletteer)
+library(circlize)
+#library(vidger)
+#library(ggpubr)
+library(scales)
+library(ComplexHeatmap)
+library(tidyr)
+library(patchwork)
+#3library(tidyverse)
+#library(gdata)
+library(stringr)
+library(ggrepel) 
+library(tidyverse)
+library(VariantAnnotation)
+library(GSVA)
+
+```
+
+# 0. Data analysis
+
+```{r}
+# Import Clinical Data & Remove Last 9 Rows
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized.txt"
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+
+# Remove last 9 rows
+clinical_data <- clinical_data[1:(nrow(clinical_data) - 9), ]
+
+#  Compute Proportions for Different Clinical Features
+calculate_proportions <- function(data, column) {
+  data %>%
+    count(!!sym(column)) %>%
+    mutate(Proportion = n / sum(n) * 100)
+}
+
+responder_prop <- calculate_proportions(clinical_data, "response_TAC1")
+wes_prop <- clinical_data %>%
+  mutate(WES_available = ifelse(WES_FFPE_sampleName != "", "Has WES", "No WES")) %>%
+  calculate_proportions("WES_available")
+
+wes_responder_prop <- clinical_data %>%
+  filter(WES_FFPE_sampleName != "") %>%
+  calculate_proportions("response_TAC1")
+
+smoking_prop <- clinical_data %>%
+  mutate(smoking_status = ifelse(smoking_status == "" | is.na(smoking_status), "Unknown", smoking_status)) %>%
+  calculate_proportions("smoking_status")
+
+stage_distribution <- clinical_data %>%
+  mutate(stage = ifelse(stage == "" | is.na(stage), "Unknown", stage)) %>%
+  calculate_proportions("stage")
+
+sex_distribution <- calculate_proportions(clinical_data, "sex")
+
+exitus_prop <- clinical_data %>%
+  calculate_proportions("exitus")
+
+
+print("Proportion of Responders vs. Non-Responders:")
+print(responder_prop)
+
+print("Proportion of Patients with WES:")
+print(wes_prop)
+
+print("Proportion of Responders and Non-Responders within WES patients:")
+print(wes_responder_prop)
+
+print("Smoking Status Distribution:")
+print(smoking_prop)
+
+print("Cancer Stage Distribution:")
+print(stage_distribution)
+
+print("Sex Distribution:")
+print(sex_distribution)
+
+print("Exitus (Survival) Distribution:")
+print(exitus_prop)
+
+```
+
+
+# Objective 1: To obtain the mutational and expression profiles of genes involved in the maintenance of the m6A mark in RCC patients
+
+## 1. To identify the variants in the genes belonging to the m6A machinery
+
+### 1.1. Filter potential artifacts and low quality variants
+
+Primero descargamos los datos MAF y realizamos las transformaciones necesarias. Necesitamos asignar un ID distinto a cada mutación para poder diferenciarlas, ya que los pacientes pueden tener mutaciones distintas en las mismas regiones y hay que diferenciarlas.
+
+
+
+```{r}
+# Definir variantes no sinónimas
+vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
+               "Frame_Shift_Del", "Frame_Shift_Ins", "Nonstop_Mutation", 
+               "Translation_Start_Site", "In_Frame_Ins", "In_Frame_Del", 
+               "Missense_Mutation", "Intron", "Splice_Region", "Silent", 
+               "RNA", "5'UTR", "3'UTR", "IGR", "5'Flank", "3'Flank")
+
+# Lista de archivos MAF
+maf_files <- list.files(path = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Mutect2_tumorOnly_variantCalling_hg38", 
+                        pattern = "\\.PASS_annotated\\.maf$", full.names = TRUE)
+
+# Definir el archivo de salida. He quitado este codigo porque no me va a dejar leerlo por ser muy pesado. Uso un documento intermedio pero despues de los filtros.
+output_maf <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_variants_2.maf"
+if (file.exists(output_maf)) file.remove(output_maf)
+
+# Crear una lista para almacenar los datos
+maf_list <- list()
+
+# Leer y almacenar cada archivo MAF
+for (file in maf_files) {
+  print(paste("Procesando:", file))
+  
+  maf_obj <- tryCatch({
+    read.maf(file, vc_nonSyn = vc_nonsyn)
+  }, error = function(e) {
+    message(paste("Error al leer:", file, "-", e$message))
+    return(NULL)
+  })
+  
+  if (!is.null(maf_obj)) {
+    maf_data <- maf_obj@data
+    
+    # Verificar que no haya pérdida de columnas
+    if (ncol(maf_data) > 0) {
+      maf_list[[file]] <- maf_data
+    }
+  }
+}
+
+# Fusionar todos los archivos en un solo dataframe
+if (length(maf_list) > 0) {
+  all_samples <- bind_rows(maf_list)  # Unir todos los MAFs sin perder columnas
+  
+  print("¡MAF fusionado guardado correctamente!")
+} else {
+  print("⚠️ No se han podido leer archivos MAF correctamente.")
+}
+
+# Eliminamos todoo menos maf_data_all
+rm(list = setdiff(ls(), "all_samples"))
+
+#añadimos los ID
+
+all_samples$variantID <- paste0(all_samples$Chromosome, ':',
+                                all_samples$Start_Position, '-',
+                                all_samples$End_Position, '_',
+                                all_samples$Reference_Allele, '>',
+                                all_samples$Tumor_Seq_Allele2, '_',
+                                all_samples$Strand, '|', 
+                                all_samples$Hugo_Symbol, '_', 
+                                all_samples$HGVSc, '_',
+                                all_samples$HGVSp, '_',
+                                all_samples$Tumor_Sample_Barcode)
+
+all_samples$variantID_noSample <- paste0(all_samples$Chromosome, ':',
+                                         all_samples$Start_Position, '-',
+                                         all_samples$End_Position, '_',
+                                         all_samples$Reference_Allele, '>',
+                                         all_samples$Tumor_Seq_Allele2, '_',
+                                         all_samples$Strand, '|',
+                                         all_samples$Hugo_Symbol, '_',
+                                         all_samples$HGVSc, '_',
+                                         all_samples$HGVSp)
+
+```
+
+Con este codigo obtenemos en el entorno un df all_samples completo. 
+
+En segundo lugar descargamos de las base de datos las regiones conflictivas. 
+
+a) sites present in the NCBI track dbVar Curated Common SVs Conflicts with Pathogenic (DbVarConflict) of hg38 genome
+
+```
+https://genome.ucsc.edu/cgi-bin/hgTables?hgsid=2482102181_ndDykqHxoIXdXrpVmAxVodXE6ptW&clade=mammal&org=&db=hg38&hgta_group=varRep&hgta_track=dbVar_conflict&hgta_table=dbVar_conflict_pathogenic&hgta_regionType=genome&position=&hgta_outputType=primaryTable&hgta_outFileName=dbVar_Conflict_SV.bed
+```
+
+b) variants present in the regions of the ENCODE blacklist subtrack, which contains a set of problematic regions due to a high ratio of multi-mapping to unique mapping reads and high variance in mappability due to repetitive elements
+
+```
+https://genome.ucsc.edu/cgi-bin/hgTables?hgsid=2482102181_ndDykqHxoIXdXrpVmAxVodXE6ptW&clade=mammal&org=Human&db=hg38&hgta_group=map&hgta_track=problematic&hgta_table=encBlacklist&hgta_regionType=genome&position=chr7%3A155%2C799%2C529-155%2C812%2C871&hgta_outputType=primaryTable&hgta_outFileName=ENCODE_blacklist_hg38.bed
+```
+
+c) sites present in the database of fragile sites in human chromosomes (HumCFS)
+He añadido un header con los nombres para que mantenga el mismo formato que los demas.
+
+``` 
+https://webs.iiitd.edu.in/raghava/humcfs/download.html
+```
+
+d) variants overlapping with the Genome-In-A-Bottle (GIAB) giabCallConflict track set
+
+```
+https://genome.ucsc.edu/cgi-bin/hgTables?hgsid=2480133759_SXHhHB4HyEncmYlu8slT0Bhd2caS&clade=mammal&org=Human&db=hg38&hgta_group=map&hgta_track=problematicGIAB&hgta_table=alldifficultregions&hgta_regionType=genome&position=chr7%3A155%2C799%2C529-155%2C812%2C871&hgta_outputType=bed&hgta_outFileName=fragile_sites
+```
+
+```{r, conflicting regions}
+#a)
+dbVarConflict <- read.delim("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/dbVar_Conflict_SV.bed", header = T)
+dbVarConflict <- dbVarConflict[,1:3]
+
+#b)
+encodeBlacklist <- read.delim('D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/ENCODE_blacklist_hg38.bed', header = T)
+encodeBlacklist <- encodeBlacklist[,1:3]
+
+#c)
+fragileSites <- read.delim('D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/HumCFS_fragile_sites_hg38.bed', header = T)
+fragileSites <- fragileSites[,1:3]
+
+#d)
+giabCallConflict <- read.delim('D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/GIAB_call_conflict.bed', header = T)
+giabCallConflict <- giabCallConflict[,1:3]
+
+# Unimos y transformar a GRanges 
+
+conflictRegions <- as.data.frame(rbind(dbVarConflict, 
+                                       encodeBlacklist, 
+                                       fragileSites,
+                                       giabCallConflict))
+
+# He cambiado el nombre de las variantes y eliminado chr para poder eliminarlo de los mafs
+
+colnames(conflictRegions) <- c("Chromosome", "Start_Position", "End_Position")
+conflictRegions$Chromosome <- gsub("chr", "", conflictRegions$Chromosome)
+
+
+conflictRegionsRanges <- GRanges(seqnames=conflictRegions$Chromosome,
+                                 ranges=paste(conflictRegions$Start_Position,
+                                              conflictRegions$End_Position,
+                                              sep='-'))
+```
+
+
+```{r, Filtering}
+# Convertir all_samples a GRanges para comparación
+tumorVariantsRanges <- GRanges(seqnames=all_samples$Chromosome,
+                               ranges=paste(all_samples$Start_Position,
+             all_samples$End_Position,
+             sep='-'))
+
+# Encontrar variantes que se solapan con regiones conflictivas
+hits <- findOverlaps(tumorVariantsRanges, conflictRegionsRanges)
+
+# Obtener índices de variantes conflictivas
+conflictiveVariants <- queryHits(hits)
+
+# Eliminar variantes conflictivas
+allNonConflictive_data <- all_samples[-conflictiveVariants, ]
+
+```
+
+```{r, filtering artifacts}
+artifacts <- read.delim('D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/ProbableArtifacts.tsv', header=F, sep=' ')
+
+# No tenia añadido el ShortVariantID 
+allNonConflictive_data$shortVariantID <-
+  paste0(allNonConflictive_data$Chromosome,':',
+         allNonConflictive_data$Start_Position, '-',                                    allNonConflictive_data$End_Position, '_',                                      allNonConflictive_data$Reference_Allele, '>',                                  allNonConflictive_data$Tumor_Seq_Allele2)
+
+artifactsindata <- allNonConflictive_data$shortVariantID %in% artifacts$V1
+
+allNonConflictive_data <- allNonConflictive_data[!(artifactsindata),]
+
+# Cargamos los variantes del PON de GAKT
+vcf <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/somatic-hg38-af-only-gnomad.hg38.noChr.MT_filteredMAF10.vcf", sep='\t', header = TRUE, skip = '#CHROM')
+
+vcf<- vcf[, .(ALT = unlist(strsplit(ALT, ","))), 
+                    by = .(`#CHROM`, POS, ID, REF)]
+vcf[, vcf_filter := paste0(`#CHROM`, ":", POS, "_", REF, "/", ALT)]
+
+allNonConflictive_data <-fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.tsv")
+
+allNonConflictive_data$vcfVariantID <-
+  paste0(allNonConflictive_data$Chromosome,':',
+         allNonConflictive_data$Start_Position, '_',                                      allNonConflictive_data$Reference_Allele, '/',                                    allNonConflictive_data$Tumor_Seq_Allele2)
+
+
+
+allNonConflictive_data <- allNonConflictive_data %>%
+  filter(!vcfVariantID %in% vcf$vcf_filter)
+
+# Guardamos en formato .tsv
+write.table(filtered, 'D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.tsv', sep='\t', col.names=T, row.names=F, quote=F)
+
+# Guardamos en formato MAF
+write.table(allNonConflictive_data, 
+            file = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.maf",
+            sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+```
+
+
+
+En la siguiente celda podemos eliminar el entorno de R salvo allNonConflictive_data. Si lo hemos ruenado previamente y tenemos el archivo descargado, podemos simplemente leer  el archivo allVariants en lugar de runear el codigo.
+
+```{r}
+rm(list = setdiff(ls(), "allNonConflictive_data"))
+```
+
+
+### 1.2. Describe the mutational profile of the m6A machinery in RCC patients
+
+Si no quiere runear el codigo anterior para conseguir el archivo, puede utilizar este codigo para cargar el tsv que incluye los datos clinicos y las variantes filtradas previamente y añadimos los datos clinicos para realizar hisgogramas: 
+
+```{r}
+allNonConflictive_data <-fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.tsv")
+```
+
+
+```{r}
+# Añadimos los datos clinicos
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized.txt"
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+
+allNonConflictive_data <- left_join(allNonConflictive_data, clinical_data, by = "Tumor_Sample_Barcode")
+
+rm(list = setdiff(ls(), "allNonConflictive_data"))
+```
+
+
+Para calcular las frecuencias alelicas usamos este codigo: 
+
+```{r}
+ggplot(filtered, aes(x = t_AF)) +
+  geom_histogram(binwidth = 0.05, fill = "coral1", color = "black", alpha = 0.7) +
+  labs(title = "Distribución de Frecuencias Alélicas (t_AF)",
+       x = "Frecuencia Alélica (t_AF)",
+       y = "Número de Variantes") +
+  theme_minimal()
+```
+
+Nos han salido dos picos muy altos en 0.5 y 0.7. Primero creamos en este paso los subset de mafs y probamos distintos filtos seleccionando finalmente: 
+
+```{r}
+# Substed y carga de MAFs 
+vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
+               "Frame_Shift_Del", "Frame_Shift_Ins", "Nonstop_Mutation", 
+               "Translation_Start_Site", "In_Frame_Ins", "In_Frame_Del", 
+               "Missense_Mutation", "Intron", "Splice_Region", "Silent", 
+               "RNA", "5'UTR", "3'UTR", "IGR", "5'Flank", "3'Flank")
+
+merged_data <- read.maf(maf = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.maf", vc_nonSyn = vc_nonsyn )
+
+merged_data <- subsetMaf(maf=merged_data, query="t_depth > 10 & t_alt_count > 3 & Variant_Classification != 'Intron'")
+
+write.table(merged_data@data, 
+            file = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.maf",
+            sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+# Filtramos los genes de m6A 
+epitranscriptomic_genes <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/epitranscriptomic_regulators_annotated.txt", 
+                                 sep = "\t", header = TRUE)
+m6A_genes <- epitranscriptomic_genes %>%
+  filter(Mark == "m6A") %>%
+  pull(Gene_symbol)
+
+m6A_data <- merged_data@data %>%
+  filter(Hugo_Symbol %in% m6A_genes)
+
+# Modificamos el nombre de Tumor_Sample_Barcode para que esté mas corto
+
+m6A_data$Tumor_Sample_Barcode <- gsub("WES_FFPE_", "", m6A_data$Tumor_Sample_Barcode)
+
+# Guardamos en .tsv y en .maf  
+write.table(m6A_data, 'D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A.tsv', sep='\t', col.names=T, row.names=F, quote=F)
+write.table(m6A_data, 
+            file = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A.maf",
+            sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+```
+
+
+```{r}
+vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
+               "Frame_Shift_Del", "Frame_Shift_Ins", "Nonstop_Mutation", 
+               "Translation_Start_Site", "In_Frame_Ins", "In_Frame_Del", 
+               "Missense_Mutation", "Intron", "Splice_Region", "Silent", 
+               "RNA", "5'UTR", "3'UTR", "IGR", "5'Flank", "3'Flank")
+
+merged_data <- read.maf(maf = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.maf", vc_nonSyn = vc_nonsyn )
+
+
+# Crear histograma
+ggplot(merged_data@data, aes(x = t_AF)) +
+  geom_histogram(binwidth = 0.05, fill = "coral1", color = "black", alpha = 0.7) +
+  labs(title = "Distribución de Frecuencias Alélicas (t_AF)",
+       x = "Frecuencia Alélica (t_AF)",
+       y = "Número de Variantes") +
+  theme_minimal()
+```
+
+Código histogramas de cantidad de variaciones: 
+
+```{r}
+# Ensure missing values are correctly labeled
+allNonConflictive_data <- allNonConflictive_data %>%
+  mutate(
+    smoking_status = ifelse(smoking_status == "" | is.na(smoking_status), "Unknown", smoking_status),
+    sex = ifelse(sex == "" | is.na(sex), "Unknown", sex),
+    response_TAC1 = ifelse(is.na(response_TAC1) | response_TAC1 == "", "Unknown", response_TAC1),
+    stage = ifelse(stage == "" | is.na(stage), "Unknown", stage)
+  )
+
+# Variants per Sample by Smoking Status
+variant_counts_smoking <- allNonConflictive_data %>%
+  count(sample_ID, smoking_status) %>%
+  arrange(desc(n))
+
+p1 <- ggplot(variant_counts_smoking, aes(x = reorder(sample_ID, -n), y = n, fill = smoking_status)) +
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  scale_fill_manual(values = c("never_smoker" = "blue", "smoker" = "red", "former_smoker" = "orange", "Unknown" = "gray")) +
+  labs(title = "Variants per Sample by Smoking Status", x = "Sample ID", y = "Number of Variants", fill = "Smoking Status") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10), 
+        axis.title = element_text(size = 14),
+        legend.position = "bottom")
+
+# Variants per Sample by Sex
+variant_counts_sex <- allNonConflictive_data %>%
+  count(sample_ID, sex) %>%
+  arrange(desc(n))
+
+p2 <- ggplot(variant_counts_sex, aes(x = reorder(sample_ID, -n), y = n, fill = sex)) +
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  scale_fill_manual(values = c("male" = "orchid1", "female" = "skyblue1", "Unknown" = "gray")) +
+  labs(title = "Variants per Sample by Sex", x = "Sample ID", y = "Number of Variants", fill = "Sex") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10), 
+        axis.title = element_text(size = 14),
+        legend.position = "bottom")
+
+# Variants per Sample by Response to Treatment
+variant_counts_response <- allNonConflictive_data %>%
+  count(sample_ID, response_TAC1) %>%
+  arrange(desc(n))
+
+p3 <- ggplot(variant_counts_response, aes(x = reorder(sample_ID, -n), y = n, fill = response_TAC1)) +
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  scale_fill_manual(values = c("responder" = "lightgreen", "non_responder" = "indianred1", "Unknown" = "gray")) +
+  labs(title = "Variants per Sample by Response", x = "Sample ID", y = "Number of Variants", fill = "Response TAC1") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10), 
+        axis.title = element_text(size = 14),
+        legend.position = "bottom")
+
+# Variants per Sample by Tumor Stage
+variant_counts_stage <- allNonConflictive_data %>%
+  count(sample_ID, stage) %>%
+  arrange(desc(n))
+
+p4 <- ggplot(variant_counts_stage, aes(x = reorder(sample_ID, -n), y = n, fill = stage)) +
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  scale_fill_manual(values = c("I" = "lightgreen", "II" = "skyblue", "III" = "orange", "IV" = "indianred1", "Unknown" = "gray")) +
+  labs(title = "Variants per Sample by Tumor Stage", x = "Sample ID", y = "Number of Variants", fill = "Tumor Stage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10), 
+        axis.title = element_text(size = 14),
+        legend.position = "bottom")
+
+# Export all plots in one PNG file (2x2 layout)
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Variants_Histograms.png", width = 4000, height = 3000, res = 300)
+gridExtra::grid.arrange(p3, p2, p4, p1, ncol = 2)
+dev.off()
+
+```
+
+
+
+Para el oncoplot usamos el .maf con sus datos clinicos
+
+```{r}
+# Cargar el archivo TSV
+maf_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A.maf"
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized_maf.txt"
+vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
+               "Frame_Shift_Del", "Frame_Shift_Ins", "Nonstop_Mutation", 
+               "Translation_Start_Site", "In_Frame_Ins", "In_Frame_Del", 
+               "Missense_Mutation", "Intron", "Splice_Region", "Silent", 
+               "RNA", "5'UTR", "3'UTR", "IGR", "5'Flank", "3'Flank")
+
+# Leer los datos
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+
+# Convertir el archivo TSV en un objeto MAF sin guardarlo
+m6A_maf <- read.maf(maf = maf_path, clinicalData = clinical_data, vc_nonSyn = vc_nonsyn)
+
+```
+
+Código oncoplot:
+
+```{r}
+
+# Filtro para que el oncoplot no este con mucho ruido
+m6A_oncoplot <- subsetMaf(maf=m6A_maf,
+query="t_AF >= 0.1 & t_depth > 10 & IMPACT != 'LOW' & Consequence != 'synonymous_variant' & Variant_Classification != 'Silent' & 
+                                  Variant_Classification != 'Intron'")
+# Guardamos
+write.table(m6A_oncoplot@data, 
+            file = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A_filtered.maf",
+            sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+
+# Definir colores oncoplot
+color.palette <- list(
+  smoking_status = c("smoker" = "red", 
+                     "former_smoker" = "orange", 
+                     "never_smoker" = "blue", 
+                     "Unknown" = "gray"),
+  response_TAC1 = c("responder" = "green", 
+                    "non_responder" = "red", 
+                    "Unknown" = "gray"),
+  sex = c("female" = "skyblue",
+          "male" = "coral1")
+)
+
+# Oncoplot
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/perfil_mut.png", width = 5000, height = 5000, res = 300)
+
+oncoplot(maf = m6A_oncoplot, 
+         top = 50,  
+         draw_titv = TRUE,  
+         clinicalFeatures = c("response_TAC1", "smoking_status", "sex"),  
+         annotationColor = color.palette,
+         sortByAnnotation = TRUE, 
+         fontSize = 0.8,
+         showTumorSampleBarcodes = TRUE,
+         legendFontSize = 3,  
+         annotationFontSize = 3,
+         titleFontSize = 3)  
+
+dev.off()
+
+```
+
+```{r}
+
+# Definir colores oncoplot
+color.palette <- list(
+  smoking_status = c("smoker" = "red", 
+                     "former_smoker" = "orange", 
+                     "never_smoker" = "blue", 
+                     "Unknown" = "gray"),
+  response_TAC1 = c("responder" = "green", 
+                    "non_responder" = "red", 
+                    "Unknown" = "gray"),
+  sex = c("female" = "skyblue",
+          "male" = "coral1")
+)
+
+# Oncoplot
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/perfil_mut_sf.png", width = 5000, height = 5000, res = 300)
+
+oncoplot(maf = m6A_maf, 
+         top = 50,  
+         draw_titv = TRUE,  
+         clinicalFeatures = c("response_TAC1", "smoking_status", "sex"),  
+         annotationColor = color.palette,
+         sortByAnnotation = TRUE, 
+         fontSize = 0.8,
+         showTumorSampleBarcodes = TRUE,
+         legendFontSize = 3,  
+         annotationFontSize = 3,
+         titleFontSize = 3)  
+
+dev.off()
+
+```
+```
+
+
+## 2. To obtain the expression levels of the genes belonging to the m6A machinery
+
+### 2.1. Quality control of gene expression
+
+
+a) Filter expression = 0
+
+```{r}
+
+# Cargar los archivos de expresión RNA-seq
+rna_seq_files <- list.files(path = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/HTseq_expression_hg38", 
+                            pattern = "\\.tsv$", full.names = TRUE)
+
+# Leer y combinar los archivos
+rna_seq_list <- lapply(rna_seq_files, function(file) {
+  df <- read.delim(file, header = FALSE, stringsAsFactors = FALSE) 
+  df$Sample <- basename(file)  # Añadir el nombre de la muestra como columna
+  return(df)
+})
+
+# Unir todas las tablas en un solo dataframe
+rna_seq_data <- bind_rows(rna_seq_list)
+colnames(rna_seq_data) <- c("gene_id", "Gene", "Expression", "Sample")
+
+rna_seq_data$gene_id <- str_remove(rna_seq_data$gene_id, "\\..*")
+
+# Filtrar los genes cuya expresión no sea 0 en todas las muestras
+rna_expression_all <- rna_seq_data %>%
+  group_by(Gene) %>%
+  filter(any(Expression != 0)) %>% 
+  ungroup()
+
+```
+
+
+
+### 2.2. Get the FPKM and TPM expression levels of the m6A machinery genes for each patient
+
+a) Calculate TPM and FPKM and separate m6a expression
+
+```{r}
+# Cargar el archivo sin encabezado
+gene_lengths <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/featureLengths_hg38.tsv", 
+                      header = FALSE, sep = "\t")
+
+# Renombrar columnas manualmente
+colnames(gene_lengths) <- c("gene_id", "gene_length", "Col3", "Col4", "Col5", "hgnc_id")
+
+# Limpiar 'gene_id' eliminando "gene_id " y el contenido después del punto "."
+gene_lengths$gene_id <- gsub('^gene_id "\\s*|"$', "", gene_lengths$gene_id)
+gene_lengths <- gene_lengths %>%
+  mutate(gene_id = str_remove(gene_id, "\\..*")) %>%  
+  dplyr::select(gene_id, gene_length)
+
+# Unir la expresión con la longitud de los genes
+rna_expression_all <- rna_expression_all %>%
+  left_join(gene_lengths, by = "gene_id")
+
+# Eliminar valores NA en 'gene_length' para evitar errores en los cálculos
+rna_expression_all <- rna_expression_all %>%
+  filter(!is.na(gene_length) & gene_length > 0)
+
+# **Calcular Total_reads antes de calcular FPKM**
+total_reads_per_sample <- rna_expression_all %>%
+  group_by(Sample) %>%
+  summarise(Total_reads = sum(Expression))  # Suma de todas las expresiones por muestra
+
+# Unir Total_reads al dataframe principal
+rna_expression_all <- rna_expression_all %>%
+  left_join(total_reads_per_sample, by = "Sample")
+
+# **Calcular FPKM**
+rna_expression_all <- rna_expression_all %>%
+  mutate(FPKM = (Expression / gene_length) / (Total_reads / 1e6))
+
+# **Calcular TPM**
+sum_FPKM_per_sample <- rna_expression_all %>%
+  group_by(Sample) %>%
+  summarise(Sum_FPKM = sum(FPKM))  # Sumar todos los FPKM por muestra
+
+# Unir Sum_FPKM al dataframe principal
+rna_expression_all <- rna_expression_all %>%
+  left_join(sum_FPKM_per_sample, by = "Sample") %>%
+  mutate(TPM = (FPKM / Sum_FPKM) * 1e6)
+
+# **Añadir los datos clínicos**
+clinical_data <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized.txt", 
+                       sep = "\t", header = TRUE)
+
+# Limpiar nombres de muestra en el RNA-seq
+rna_expression_all$Sample <- gsub("htseq-", "", rna_expression_all$Sample)
+rna_expression_all$Sample <- gsub(".tsv", "", rna_expression_all$Sample)
+
+# Unir datos clínicos
+merged_rna_clinical <- rna_expression_all %>%
+  left_join(clinical_data, by = c("Sample" = "RNA_FFPE_sampleName"))
+  
+```
+
+
+```{r, Solo m6A}
+# Seleccionar genes de m6A
+epitranscriptomic_genes <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/epitranscriptomic_regulators_annotated.txt", 
+                                 sep = "\t", header = TRUE)
+
+m6A_genes <- epitranscriptomic_genes %>%
+  filter(Mark == "m6A") %>%
+  pull(Gene_symbol)
+
+# Filtrar solo genes de la maquinaria m6A
+rna_m6a_expression <- merged_rna_clinical %>%
+  filter(Gene %in% m6A_genes)
+
+
+
+```
+
+b) Grafiqueamos los boxplot
+
+```{r, boxplot TPM}
+### RAW BOXPLOT ###
+# Ensure response_TAC1 is a factor
+merged_rna_clinical$response_TAC1 <- factor(merged_rna_clinical$response_TAC1, levels = c("responder", "non_responder"))
+
+# Create the boxplot
+p1 <- ggplot(merged_rna_clinical, aes(x = reorder(Sample, Expression, median), y = Expression, fill = response_TAC1)) +
+  geom_boxplot(alpha = 0.7) +  # Remove outliers
+  scale_y_log10() +  
+  scale_fill_manual(values = c("responder" = "#32CD32", "non_responder" = "#FF6347")) +  # Custom colors
+  labs(title = "Raw Gene Expression",
+       x = "Patient Sample",
+       y = "Gene Expression (log10)",
+       fill = "Response Type") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, hjust = 1, size = 10), 
+        axis.title = element_text(size = 14))
+
+# Export as PNG
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/raw_Histograms.png", width = 2000, height = 1000, res = 150)
+print(p1)  
+dev.off()
+
+### TPM AND FPKM BOXTPLOT ###
+p2 <- ggplot(merged_rna_clinical, aes(x = reorder(Sample, Expression, median), y = TPM, fill = response_TAC1)) +
+  geom_boxplot(alpha = 0.7) + 
+  scale_y_log10() +  # Log-transform
+  scale_fill_manual(values = c("responder" = "#32CD32", "non_responder" = "#FF6347")) +  # Custom colors
+  labs(title = "TPM Distribution Per Sample",
+       x = "Patient Sample",
+       y = "Gene Expression (log10)",
+       fill = "Response Type") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, hjust = 1, size = 10), 
+        axis.title = element_text(size = 14))
+
+p3 <- ggplot(merged_rna_clinical, aes(x = reorder(Sample, Expression, median), y = FPKM, fill = response_TAC1)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_y_log10() +  # Log-transform
+  scale_fill_manual(values = c("responder" = "#32CD32", "non_responder" = "#FF6347")) +  # Custom colors
+  labs(title = "FPKM Distribution Per Sample",
+       x = "Patient Sample",
+       y = "Gene Expression (log10)",
+       fill = "Response Type") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90, hjust = 1, size = 10), 
+        axis.title = element_text(size = 14))
+
+# Export as PNG
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/TPM_FPKM_Histograms.png", width = 2000, height = 1000, res = 150)
+print(p2 | p3)  
+dev.off()
+
+
+```
+
+
+```{r,PCA raw}
+
+
+```
+
+```{r, PCA TPM}
+
+
+```
+
+```{r, PCA TPM m6A}
+
+```
+
+```{r, heatmap}
+
+# Replace zeros with NA to avoid log-scale issues
+rna_m6a_expression <- rna_m6a_expression %>%
+  mutate(TPM = ifelse(TPM == 0, NA, TPM),
+         FPKM = ifelse(FPKM == 0, NA, FPKM))
+
+# TPM Heatmap Preparation
+rna_m6a_matrix <- rna_m6a_expression %>%
+  select(Sample, Gene, TPM) %>%
+  spread(Sample, TPM)  
+
+# Convert to matrix & keep `sample_ID`
+rownames(rna_m6a_matrix) <- rna_m6a_matrix$gene_name  # Keep gene names
+rna_m6a_matrix <- as.matrix(rna_m6a_matrix[,-1])  
+
+# Normalize expression (Z-score per gene)
+rna_m6a_matrix_scaled <- t(scale(t(rna_m6a_matrix)))  
+
+# Clinical Annotations (Including `sample_ID`)
+annotation_col <- merged_rna_clinical %>%
+  select(Sample, sample_ID, response_TAC1, sex, smoking_status) %>%
+  distinct() 
+
+# Set `Sample` as rownames for heatmap annotations
+rownames(annotation_col) <- annotation_col$Sample  
+annotation_col <- annotation_col %>% select(-Sample)  
+
+# 🔹 **Define annotation colors**
+ann_colors <- list(
+  response_TAC1 = c("responder" = "green", "non_responder" = "red"),
+  sex = c("male" = "lightcoral", "female" = "lightgreen"),
+  smoking_status = c("never_smoker" = "blue", "smoker" = "brown", "former_smoker" = "orange", "NA" = "lightgrey")
+)
+
+
+# Save TPM Heatmap as PNG
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/m6A_Heatmap.png", width = 2000, height = 1500, res = 150)
+Heatmap(
+  rna_m6a_matrix_scaled,  
+  name = "TPM",
+  color = colorRamp2(c(-4, 0, 4), c("blue", "white", "red")), 
+  top_annotation = HeatmapAnnotation(df = annotation_col, col = ann_colors),
+  show_row_names = TRUE,  # Show gene names
+  show_column_names = TRUE,  # **Now showing sample_ID**
+  column_title = "TPM Heatmap with Clinical Annotations",
+  clustering_distance_rows = "euclidean",
+  clustering_distance_columns = "euclidean"
+)
+dev.off()
+
+```
+
+
+## 3. To evaluate if the somatic mutations have an effect on gene expression
+
+### 3.1. Select variants with a predicted effect at protein level (missense, truncating, frameshift and/or splice variants)
+
+Cargamos el archivo si no esta cargado
+```{r}
+# Cargar el archivo TSV
+maf_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A.maf"
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized_maf.txt"
+vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
+               "Frame_Shift_Del", "Frame_Shift_Ins", "Nonstop_Mutation", 
+               "Translation_Start_Site", "In_Frame_Ins", "In_Frame_Del", 
+               "Missense_Mutation", "Intron", "Splice_Region", "Silent", 
+               "RNA", "5'UTR", "3'UTR", "IGR", "5'Flank", "3'Flank")
+
+# Leer los datos
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+
+# Convertir el archivo TSV en un objeto MAF sin guardarlo
+merged_data <- read.maf(maf = maf_path, clinicalData = clinical_data, vc_nonSyn = vc_nonsyn)
+```
+
+Seleccionamos las variantes que afectan a la proteina 
+```{r}
+# Define mutations that affect protein function
+protein_effect_mutations <- c("Missense_Mutation", 
+                              "Nonsense_Mutation", 
+                              "Frame_Shift_Del", 
+                              "Frame_Shift_Ins", 
+                              "Splice_Site")
+
+# Filter m6A mutations based on effect
+m6A_protein_effect_mutations <- subsetMaf(maf = merged_data, 
+                                          query = paste0("Variant_Classification %in% c('", 
+                                                         paste(protein_effect_mutations, collapse = "','"), 
+                                                         "')"))
+```
+
+
+realizamos un oncoplot
+```{r}
+# Definir colores oncoplot
+color.palette <- list(
+  smoking_status = c("smoker" = "red", 
+                     "former_smoker" = "orange", 
+                     "never_smoker" = "blue", 
+                     "Unknown" = "gray"),
+  response_TAC1 = c("responder" = "green", 
+                    "non_responder" = "red", 
+                    "Unknown" = "gray"),
+  sex = c("female" = "skyblue",
+          "male" = "coral1")
+)
+
+# Oncoplot
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/perfil_mut_proteffect.png", width = 2000, height = 2000, res = 300)
+
+oncoplot(maf = m6A_protein_effect_mutations, 
+         top = 10,  
+         draw_titv = TRUE,  
+         clinicalFeatures = c("response_TAC1", "smoking_status", "sex"),  
+         annotationColor = color.palette,
+         sortByAnnotation = TRUE, 
+         fontSize = 0.8,
+         showTumorSampleBarcodes = TRUE,
+         legendFontSize = 1,  
+         annotationFontSize = 1,
+         titleFontSize = 1)  
+
+dev.off()
+```
+```{r}
+m6A_mutation_dataset <- m6A_protein_effect_mutations@data %>%
+  dplyr::select(Hugo_Symbol,           
+                Tumor_Sample_Barcode,  
+                Variant_Classification, 
+                PolyPhen,               
+                SIFT,   
+                IMPACT
+  
+  )
+
+```
+PolyPhen
+probably damaging (PR): It is with high confidence supposed to affect protein function or structure
+possibly damaging (PO): It is supposed to affect protein function or structure
+benign (BE): Most likely lacking any phenotypic effect
+unknown (UN): When in some rare cases, the lack of data does not allow PolyPhen to make a prediction
+
+
+SIFT
+tolerated: Not likely to have a phenotypic effect
+tolerated_low_confidence: More likely to have a phenotypic effect than 'tolerated'
+deleterious: Likely to have a phenotypic effect
+deleterious_low_confidence: Less likely to have a phenotypic effect than 'deleterious'
+
+```{r}
+pathogenic <- merged_data@data %>%
+  filter(
+    # SIFT = 'deleterious' y PolyPhen = 'damaging'
+    (grepl('deleterious', SIFT, ignore.case = TRUE) & grepl('damaging', PolyPhen, ignore.case = TRUE)) |
+    # IMPACT es 'HIGH'
+    IMPACT == 'HIGH' # Añadir que impacto  = modifier y el moderate
+  ) %>%
+  # gnomAD_AF < 0.01 o es NA
+  filter(gnomAD_AF < 0.01 | is.na(gnomAD_AF))
+```
+
+```{r}
+p_dataset <- pathogenic %>%
+  dplyr::select(Hugo_Symbol,           
+                Tumor_Sample_Barcode,  
+                Variant_Classification, 
+                PolyPhen,               
+                SIFT,   
+                IMPACT
+  
+  )
+
+p_dataset
+```
+
+
+### 3.2. Evaluate how the mutational status of the m6A machinery affect the expression of epitranscriptomic signatures (GOBP_MRNA_MODIFICATION, GOBP_RNA_MODIFICATION)
+
+Ir a chunk 19 y 20 y subir los datos.
+
+He tenido muchos errores debido a que algunos grupos de genes pacientes estan repes. concretamente 47890 de 48115 son unicos, y el resto aparecen mas de una vez por paciente:
+
+
+```{r}
+merged_rna_clinical %>%
+  dplyr::group_by(Gene, Sample) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+  dplyr::filter(n > 1)
+```
+
+```{r}
+library(dplyr)
+
+unique_gene_sample_counts <- merged_rna_clinical %>%
+  group_by(Gene, Sample) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  filter(n == 1) %>%                 # Solo combinaciones únicas
+  count(Sample, name = "unique_genes") 
+
+print(unique_gene_sample_counts)
+
+```
+ Lo he solucionado creando una funcion que calcule la media para esas expresiones repes.
+
+sacar la firma de todas las muestras de rna y seq. 
+
+ver si hay mutaciones en la maquinaria cambia la actividad epitranscriptomica del tumor. eso se puede ver con lae pxresion entonces me quedo con las rna seq y exoma. saco el valor de las firmas en todas las muestras y ahcer un heatmap y en anotaciones poner si responden o no y el estado de la mutacion 
+al paquetue GSVVA le meto los tpm y mis firmas. las firmas se sacande una lista y todos los genes de esa lista y me saca el score para esa. 
+
+en GSEA msigdb puedo buscar firmas pero es un poco dificil. Estabilidad del mensajero. buscar mrna stability/ degradacion etc.
+
+
+```{r}
+# Define gene sets
+gobp_rna_mod <- c("METTL15P1", "ADAR", "ADARB1", "EMG1", "ADARB2", "WDR4", "APOBEC2", "DUS4L", "WDR6", "KTI12", "RPUSD1", "HENMT1", "BUD23","TRMT61A", "TSR3", "FTSJ3", "MTFMT", "PUSL1", "TYW3", "TYW5", "METTL6", "ADAD1", "ADAT2", "APOBEC3D", "TRUB1", "BCDIN3D", "B3GNTL1", "PUS10", "TRMT44", "NSUN5P1", "TRMT10B", "AARS1", "ADAD2", "APOBEC3H", "DKC1", "TRDMT1", "METTL15", "APOBEC3A", "APOBEC3F", "AKT1", "FBL", "NSUN6", "JMJD6", "ELP5", "FTSJ1", "MTO1", "THUMPD3", "VIRMA", "NSUN5P2", "ELP4", "TRUB2", "RPUSD2", "DIMT1", "MOCS3", "APOBEC3C", "RPUSD3", "DPH3", "DTWD2", "ZCCHC4", "METTL5", "RBM15B", "MRM2", "A1CF", "HSD17B10", "HNRNPAB", "APOBEC1", "METTL2A", "FBLL1", "CTU2", "RAMACL", "NSUN4", "METTL1", "TYW1B", "NOP2", "PARN", "TPRKB", "SEPSECS", "METTL25B", "TFB1M", "TRMT112","TRMO", "LARP7", "TRMT6", "CDK5RAP1", "DNAJB11", "GAR1", "TRMT13", "RBM47", "PUS7", "ANKRD16", "TRIT1", "ELP6", "NSUN2", "CDKAL1", "DUS2", "TRMT10C", "THG1L", "TRMT61B", "TRMT12", "ELP3", "DALRD3", "MRM3", "NAT10", "ELP2", "TYW1", "NOP10", "TRMT1", "THUMPD1", "OSGEP", "NHP2", "TRMU", "NSUN5", "METTL2B", "MEPCE", "METTL3", "DUS3L", "DTWD1", "AICDA", "TRMT5", "TRMT9B", "METTL14", "APOBEC3G", "SARS1", "THADA", "NSUN3", "DUS1L", "OSGEPL1", "TFB2M", "RBM15", "METTL4", "SNRPB", "SNRPD1", "SNRPD2", "SNRPD3", "SNRPE", "SNRPF", "SNRPG", "SSB", "TARBP1", "METTL16", "QTRT2", "YRDC", "GTDC1", "METTL8", "MRM1", "TRMT2B", "PUS1", "THUMPD2", "URM1", "TRMT1L", "QTRT1", "PUS7L", "PUS3", "RAMAC", "QNG1", "GON7", "GTPBP3", "RPUSD4", "ELP1", "RNMT", "ALKBH1", "CTU1", "ALKBH8", "FDXACB1", "NAF1", "TRMT10A", "BAG4", "APOBEC3B", "WTAP", "TGS1", "LCMT2")
+
+gobp_mrna_mod <- c("APOBEC2", "TRUB1", "DKC1", "VIRMA", "TRUB2", "RPUSD2", "A1CF", "HNRNPAB", "APOBEC1", "DNAJB11", "PUS7", "METTL3", "METTL14", "METTL4", "PUS1", "PUS7L", "PUS3", "RPUSD4", "BAG4", "WTAP")
+
+
+gene_sets <- list(GOBP_RNA_MODIFICATION = gobp_rna_mod, 
+                  GOBP_MRNA_MODIFICATION = gobp_mrna_mod)
+
+merged_rna_clinical$TPM <- as.numeric(merged_rna_clinical$TPM)
+
+# Convert TPM values into a matrix with genes as rows and samples as columns
+tpm_df <- merged_rna_clinical %>%
+  dplyr::select(Gene, Sample, Expression) %>%
+  pivot_wider(
+    names_from = Sample,
+    values_from = Expression,
+    values_fn = mean
+  ) %>%
+  column_to_rownames(var = "Gene")
+
+tpm_matrix <- as.matrix(tpm_df)
+
+# Define GSVA parameters
+gsva.param <- gsvaParam(exprData = tpm_matrix, 
+                        geneSets = gene_sets)
+
+# Run GSVA
+gsva_scores <- gsva(gsva.param, verbose = F)
+
+
+```
+
+```{r}
+
+
+
+# Escoge solo las firmas epitranscriptómicas
+selected_pathways <- c("GOBP_RNA_MODIFICATION", "GOBP_MRNA_MODIFICATION")
+heatmap_matrix <- gsva_scores[selected_pathways, ]
+
+# Hacer heatmap
+pheatmap(heatmap_matrix,
+         scale = "row",  # Normaliza por firma
+         annotation_col = annotation_data,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         show_colnames = FALSE,
+         fontsize_row = 10,
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(100))
+
+```
+
+
+# Objective 2: To evaluate whether there is a dysregulation of the m6A machinery that could serve as a biomarker of response to immunotherapy in RCC patients.
+
+
+## 1.	To identify somatic variants from the m6A machinery that are exclusively found in responder and non-responder patients
+
+
+### 1.1. Identify genes that are exclusively mutated in responders and non-responders to immunotherapy 
+
+```{r}
+# Separar datos en respondedores y no respondedores
+clinical_data <- merged_data@clinical.data  
+responders <- clinical_data %>% filter(response_TAC1 == "responder") %>% pull(Tumor_Sample_Barcode)
+non_responders <- clinical_data %>% filter(response_TAC1 == "non_responder") %>% pull(Tumor_Sample_Barcode)
+
+# Filtrar mutaciones para respondedores
+resp_mutated_genes <- merged_data@data %>% 
+  filter(Tumor_Sample_Barcode %in% responders) %>%
+  group_by(Hugo_Symbol, Tumor_Sample_Barcode) %>%
+  count()
+
+colnames(resp_mutated_genes)[3] <- "nbVariants"
+
+nbSamples_gene_resp <- resp_mutated_genes %>% group_by(Hugo_Symbol) %>% count()
+nbVariants_gene_resp <- resp_mutated_genes %>% group_by(Hugo_Symbol) %>% summarise(nbVariants = sum(nbVariants))
+
+# Filtrar mutaciones para no respondedores
+nonResp_mutated_genes <- merged_data@data %>% 
+  filter(Tumor_Sample_Barcode %in% non_responders) %>%
+  group_by(Hugo_Symbol, Tumor_Sample_Barcode) %>%
+  count()
+
+colnames(nonResp_mutated_genes)[3] <- "nbVariants"
+
+nbSamples_gene_nonResp <- nonResp_mutated_genes %>% group_by(Hugo_Symbol) %>% count()
+nbVariants_gene_nonResp <- nonResp_mutated_genes %>% group_by(Hugo_Symbol) %>% summarise(nbVariants = sum(nbVariants))
+
+
+```
+
+
+```{r}
+head(nbSamples_gene_resp)
+head(nbVariants_gene_resp)
+head(nbSamples_gene_nonResp)
+head(nbVariants_gene_nonResp)
+```
+
+
+```{r}
+pmultipleResp <- resp_mutated_genes[resp_mutated_genes$n > 1,]
+pmultipleNonResp <- nonResp_mutated_genes[nonResp_mutated_genes$n > 1,]
+
+
+pjustResp <- pmultipleResp[!(pmultipleResp$Hugo_Symbol %in% pmultipleNonResp$Hugo_Symbol),]
+
+pjustResp_strict <- pmultipleResp[!(pmultipleResp$Hugo_Symbol %in% pnonResp_mutated_genes$Hugo_Symbol),]
+
+
+pjustNonResp <- pmultipleNonResp[!(pmultipleNonResp$Hugo_Symbol %in% pmultipleResp$Hugo_Symbol),]
+pjustNonResp_strict <- pmultipleNonResp[!(pmultipleNonResp$Hugo_Symbol %in% presp_mutated_genes$Hugo_Symbol),]
+
+penrichr_results <- enrichr(pjustResp_strict$Hugo_Symbol, c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational','BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+
+penrichr_results <- enrichr(pjustNonResp_strict$Hugo_Symbol, c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational','BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+
+
+
+```
+
+
+### 1.2. Identify specific variants that are exclusively present in responders and non-responders to immunotherapy 
+	
+	
+	
+	
+	
+	
