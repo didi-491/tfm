@@ -591,7 +591,7 @@ oncoplot(maf = m6A_maf,
 dev.off()
 
 ```
-```
+
 
 
 ## 2. To obtain the expression levels of the genes belonging to the m6A machinery
@@ -846,6 +846,7 @@ dev.off()
 ### 3.1. Select variants with a predicted effect at protein level (missense, truncating, frameshift and/or splice variants)
 
 Cargamos el archivo si no esta cargado
+
 ```{r}
 # Cargar el archivo TSV
 maf_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A.maf"
@@ -859,8 +860,8 @@ vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation",
 # Leer los datos
 clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
 
-# Convertir el archivo TSV en un objeto MAF sin guardarlo
-merged_data <- read.maf(maf = maf_path, clinicalData = clinical_data, vc_nonSyn = vc_nonsyn)
+
+m6A_maf <- read.maf(maf = maf_path, clinicalData = clinical_data, vc_nonSyn = vc_nonsyn)
 ```
 
 Seleccionamos las variantes que afectan a la proteina 
@@ -873,7 +874,7 @@ protein_effect_mutations <- c("Missense_Mutation",
                               "Splice_Site")
 
 # Filter m6A mutations based on effect
-m6A_protein_effect_mutations <- subsetMaf(maf = merged_data, 
+m6A_protein_effect_mutations <- subsetMaf(maf = m6A_maf, 
                                           query = paste0("Variant_Classification %in% c('", 
                                                          paste(protein_effect_mutations, collapse = "','"), 
                                                          "')"))
@@ -924,6 +925,8 @@ m6A_mutation_dataset <- m6A_protein_effect_mutations@data %>%
   )
 
 ```
+
+
 PolyPhen
 probably damaging (PR): It is with high confidence supposed to affect protein function or structure
 possibly damaging (PO): It is supposed to affect protein function or structure
@@ -966,7 +969,7 @@ p_dataset
 
 ### 3.2. Evaluate how the mutational status of the m6A machinery affect the expression of epitranscriptomic signatures (GOBP_MRNA_MODIFICATION, GOBP_RNA_MODIFICATION)
 
-Ir a chunk 19 y 20 y subir los datos.
+Ir a chunk 18 y 19 y subir los datos.
 
 He tenido muchos errores debido a que algunos grupos de genes pacientes estan repes. concretamente 47890 de 48115 son unicos, y el resto aparecen mas de una vez por paciente:
 
@@ -979,8 +982,6 @@ merged_rna_clinical %>%
 ```
 
 ```{r}
-library(dplyr)
-
 unique_gene_sample_counts <- merged_rna_clinical %>%
   group_by(Gene, Sample) %>%
   summarise(n = n(), .groups = "drop") %>%
@@ -1006,9 +1007,38 @@ gobp_rna_mod <- c("METTL15P1", "ADAR", "ADARB1", "EMG1", "ADARB2", "WDR4", "APOB
 
 gobp_mrna_mod <- c("APOBEC2", "TRUB1", "DKC1", "VIRMA", "TRUB2", "RPUSD2", "A1CF", "HNRNPAB", "APOBEC1", "DNAJB11", "PUS7", "METTL3", "METTL14", "METTL4", "PUS1", "PUS7L", "PUS3", "RPUSD4", "BAG4", "WTAP")
 
+GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY <- c("PATL2", "CNOT1", "CNOT6L", "PAN3", "CNOT2", "NBDY", "CNOT6", "PAN2")
+
+GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY <- c("CNOT1", "CNOT6L", "PAN3", "CNOT2", "CNOT6", "PAN2")
+
+GOCC_CHROMATOID_BODY <- c("TDRD5", "EIF4E", "TDRD6", "SMG1", "TDRD7", "DDX25", "BMAL1", "NSUN2", "PIWIL2", "TDRD1", "MAEL", "PIWIL1", "CLOCK")
+
+GOCC_P_BODY <- c("HAX1", "IGF2BP1", "IGF2BP3", "IGF2BP2", "PNRC1", "RBPMS", "LSM6", "WTIP", "DIS3L2", "TRIM71", "APOBEC3D", "RC3H1", "APOBEC3H", "DDX6", "DCP2", "AGO3", "AGO4", "DCP1B", "PATL2", "EIF4E", "ELAVL1", "APOBEC3A", "APOBEC3F", "C9orf72", "PATL1", "CNOT1", "SAMD4A", "TNRC6B", "SYNE1", "CARHSP1", "EDC4", "YTHDF3", "PAN3", "LSM4", "NOCT", "LSM14A", "AGO1", "AGO2", "LSM1", "LSM3", "TNRC6A", "APOBEC3C", "DCPS", "CNOT7", "NANOS2", "ZC3H12D", "NANOS3", "ISG20", "CAPRIN1", "MOV10", "CNOT2", "CNOT3", "YBX1", "YTHDF2", "BTBD1", "POLR2G", "XRN1", "RC3H2", "YTHDF1", "NBDY", "SAMD4B", "SHFL", "PNRC2", "BTBD2", "DCP1A", "UBAP2", "EIF4ENIF1", "PSMA2", "PSMA4", "PSMA6", "PSMC2", "PSMC3", "AICDA", "TNRC6C", "LSM2","UPF1", "APOBEC3G", "CPEB1", "TRIM21", "ZFP36L1", "TOP1", "ZFP36", "CSDE1", "FAM184A", "LIN28A", "ZC3H12A", "EDC3", "MEX3B", "AJUBA", "TRIM5", "SQSTM1", "LIMD1", "CNOT9", "MEX3A", "CNOT8", "EIF4E2", "APOBEC3B", "PUM1", "GARRE1", "PAN2")
+
+GOBP_MIRNA_PROCESSING <- c("ZMPSTE24", "ADAR", "TRIM71", "TRUB1", "BCDIN3D", "PUS10", "DDX5", "AGO3", "AGO4", "NCBP2", "ZC3H7B", "TUT4", "PUM2", "DICER1", "AGO1", "AGO2", "ZC3H7A", "DROSHA", "HNRNPA2B1", "IL6", "LIN28B", "HOXB-AS3", "SMAD1", "SMAD2", "SMAD3", "MECP2", "NCBP1", "SPOUT1", "SRRT", "DGCR8", "METTL3", "SRSF3", "BMP4", "STAT3", "TARBP2", "TGFB1", "TP53", "TUT7", "LIN28A", "SNIP1", "ZC3H10", "PRKRA", "RIPK1", "NUP155", "PUM1")
+GOBP_RNA_STABILIZATION <- c("SYNCRIP", "PAIP1", "IGF2BP1", "IGF2BP3", "IGF2BP2","TRAF3IP2", "HNRNPA0", "TENT4A", "TIRAP", "CIRBP", "TENT5B", "MAPK14", "DAZ1", "DAZL", "DHX9", "RBM46", "TENT5D", "DHX36", "DKC1", "TRDMT1", "E2F1", "ELAVL1", "ELAVL4", "RBM24", "LARP4B", "LARP1", "TARDBP", "FUS", "NOCT", "GDNF", "PABPC1", "MEIOC", "HNRNPC", "HNRNPD", "HNRNPU", "ZAR1", "APOBEC1", "IREB2", "DND1", "METTL1", "MYD88", "YBX1", "PARN", "ZCCHC17", "PHAX", "RBM47", "TENT5C", "NSUN2", "NRDE2", "LARP1B", "TENT5A", "EIF4ENIF1", "DAZ3", "DAZ2", "DAZ4","METTL14", "TENT4B", "SLC11A1", "BOLL", "TRAF2", "TRAF5", "VIP", "FP36", "CSDE1", "METTL16", "TAF15", "RBM10", "AXIN2", "YBX3", "ANGEL2", "NAF1", "MAPKAPK2", "QKI", "IKBKE", "THRAP3")
+
+gmt_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Databases/GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING.v2024.1.Hs.gmt"
+
+gmt_line <- readLines(gmt_path, n = 1)
+gmt_fields <- strsplit(gmt_line, "\t")[[1]]
+
+# 2. Extraer el nombre de la firma y los genes
+GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING <- gmt_fields[3:length(gmt_fields)]
+signature_name <- gmt_fields[1] 
+
+
 
 gene_sets <- list(GOBP_RNA_MODIFICATION = gobp_rna_mod, 
-                  GOBP_MRNA_MODIFICATION = gobp_mrna_mod)
+                  GOBP_MRNA_MODIFICATION = gobp_mrna_mod,
+                  GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY = GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY, 
+                  GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY = GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY,
+                  GOCC_CHROMATOID_BODY = GOCC_CHROMATOID_BODY,
+                  GOCC_P_BODY = GOCC_P_BODY,
+                  GOBP_MIRNA_PROCESSING = GOBP_MIRNA_PROCESSING,
+                  GOBP_RNA_STABILIZATION = GOBP_RNA_STABILIZATION,
+                  GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING = GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING
+                  )
 
 merged_rna_clinical$TPM <- as.numeric(merged_rna_clinical$TPM)
 
@@ -1035,17 +1065,22 @@ gsva_scores <- gsva(gsva.param, verbose = F)
 ```
 
 ```{r}
-
-
-
 # Escoge solo las firmas epitranscriptómicas
-selected_pathways <- c("GOBP_RNA_MODIFICATION", "GOBP_MRNA_MODIFICATION")
+selected_pathways <- c("GOBP_RNA_MODIFICATION",
+                  "GOBP_MRNA_MODIFICATION",
+                  "GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY",
+                  "GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY",
+                  "GOCC_CHROMATOID_BODY",
+                  "GOCC_P_BODY",
+                  "GOBP_MIRNA_PROCESSING",
+                  "GOBP_RNA_STABILIZATION",
+                  "GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING" )
 heatmap_matrix <- gsva_scores[selected_pathways, ]
 
 # Hacer heatmap
 pheatmap(heatmap_matrix,
          scale = "row",  # Normaliza por firma
-         annotation_col = annotation_data,
+      #   annotation_col = annotation_data,
          cluster_rows = TRUE,
          cluster_cols = TRUE,
          show_colnames = FALSE,
