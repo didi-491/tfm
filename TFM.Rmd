@@ -31,7 +31,6 @@ library(scales)
 library(ComplexHeatmap)
 library(tidyr)
 library(patchwork)
-#3library(tidyverse)
 #library(gdata)
 library(stringr)
 library(ggrepel) 
@@ -349,9 +348,9 @@ Para calcular las frecuencias alelicas usamos este codigo:
 ```{r}
 ggplot(filtered, aes(x = t_AF)) +
   geom_histogram(binwidth = 0.05, fill = "coral1", color = "black", alpha = 0.7) +
-  labs(title = "Distribución de Frecuencias Alélicas (t_AF)",
-       x = "Frecuencia Alélica (t_AF)",
-       y = "Número de Variantes") +
+  labs(title = "Allele Frequencies Distribution)",
+       x = "Allele Frequencies",
+       y = "Variants Number") +
   theme_minimal()
 ```
 
@@ -408,10 +407,10 @@ merged_data <- read.maf(maf = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2
 
 # Crear histograma
 ggplot(merged_data@data, aes(x = t_AF)) +
-  geom_histogram(binwidth = 0.05, fill = "coral1", color = "black", alpha = 0.7) +
-  labs(title = "Distribución de Frecuencias Alélicas (t_AF)",
-       x = "Frecuencia Alélica (t_AF)",
-       y = "Número de Variantes") +
+  geom_histogram(binwidth = 0.05, fill = "indianred1", color = "black", alpha = 0.7) +
+  labs(title = "Allele Frequencies Distribution)",
+       x = "Allele Frequencies",
+       y = "Variants Number") +
   theme_minimal()
 ```
 
@@ -559,6 +558,32 @@ dev.off()
 ```
 
 ```{r}
+# Cargar el archivo TSV
+maf_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A.maf"
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized_maf.txt"
+vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
+               "Frame_Shift_Del", "Frame_Shift_Ins", "Nonstop_Mutation", 
+               "Translation_Start_Site", "In_Frame_Ins", "In_Frame_Del", 
+               "Missense_Mutation", "Intron", "Splice_Region", "Silent", 
+               "RNA", "5'UTR", "3'UTR", "IGR", "5'Flank", "3'Flank")
+
+# Leer los datos
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+clinical_data <- clinical_data %>%
+  mutate(smoking_status = as.character(smoking_status)) %>%
+  mutate(smoking_status = ifelse(is.na(smoking_status) | smoking_status == "", "Unknown", smoking_status)) %>%
+  mutate(smoking_status = factor(smoking_status, levels = c("smoker", "former_smoker", "never_smoker", "Unknown")))
+
+
+# Convertir el archivo TSV en un objeto MAF sin guardarlo
+m6A_maf <- read.maf(maf = maf_path, clinicalData = clinical_data, vc_nonSyn = vc_nonsyn)
+
+
+
+m6A_maf@clinical.data$smoking_status <- factor(
+  m6A_maf@clinical.data$smoking_status,
+  levels = c("smoker", "former_smoker", "never_smoker", "Unknown")
+)
 
 # Definir colores oncoplot
 color.palette <- list(
@@ -567,14 +592,13 @@ color.palette <- list(
                      "never_smoker" = "blue", 
                      "Unknown" = "gray"),
   response_TAC1 = c("responder" = "green", 
-                    "non_responder" = "red", 
-                    "Unknown" = "gray"),
+                    "non_responder" = "red"),
   sex = c("female" = "skyblue",
           "male" = "coral1")
 )
 
 # Oncoplot
-png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/perfil_mut_sf.png", width = 5000, height = 5000, res = 300)
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/perfil_mut_sf.png", width = 3000, height = 3000, res = 300)
 
 oncoplot(maf = m6A_maf, 
          top = 50,  
@@ -584,9 +608,10 @@ oncoplot(maf = m6A_maf,
          sortByAnnotation = TRUE, 
          fontSize = 0.8,
          showTumorSampleBarcodes = TRUE,
-         legendFontSize = 3,  
-         annotationFontSize = 3,
-         titleFontSize = 3)  
+         legendFontSize = 1.5,  
+         annotationFontSize = 1.5,
+         titleFontSize = 1.5,
+         titleText = "Oncoplot of m6A machinery genes. Altered in 16 of 18 patients (88.89%)")  
 
 dev.off()
 
@@ -875,8 +900,7 @@ protein_effect_mutations <- c("Missense_Mutation",
 
 # Filter m6A mutations based on effect
 m6A_protein_effect_mutations <- subsetMaf(maf = m6A_maf, 
-                                          query = paste0("Variant_Classification %in% c('", 
-                                                         paste(protein_effect_mutations, collapse = "','"), 
+                                          query = paste0("Variant_Classification %in% c('",                                                  paste(protein_effect_mutations, collapse = "','"), 
                                                          "')"))
 ```
 
@@ -941,30 +965,32 @@ deleterious: Likely to have a phenotypic effect
 deleterious_low_confidence: Less likely to have a phenotypic effect than 'deleterious'
 
 ```{r}
-pathogenic <- merged_data@data %>%
-  filter(
-    # SIFT = 'deleterious' y PolyPhen = 'damaging'
-    (grepl('deleterious', SIFT, ignore.case = TRUE) & grepl('damaging', PolyPhen, ignore.case = TRUE)) |
-    # IMPACT es 'HIGH'
-    IMPACT == 'HIGH' # Añadir que impacto  = modifier y el moderate
-  ) %>%
-  # gnomAD_AF < 0.01 o es NA
-  filter(gnomAD_AF < 0.01 | is.na(gnomAD_AF))
-```
+# Tipos de mutaciones que afectan la proteína
+protein_effect_mutations <- c("Missense_Mutation", 
+                              "Nonsense_Mutation", 
+                              "Frame_Shift_Del", 
+                              "Frame_Shift_Ins", 
+                              "Splice_Site")
 
-```{r}
-p_dataset <- pathogenic %>%
-  dplyr::select(Hugo_Symbol,           
-                Tumor_Sample_Barcode,  
-                Variant_Classification, 
-                PolyPhen,               
-                SIFT,   
-                IMPACT
-  
+# Filtrado estricto: TODAS las condiciones deben cumplirse
+pathogenic <- m6A_maf@data %>%
+  filter(
+    Variant_Classification %in% protein_effect_mutations,
+    grepl("deleterious", SIFT, ignore.case = TRUE),
+    grepl("damaging", PolyPhen, ignore.case = TRUE),
+    IMPACT != "LOW",
+    gnomAD_AF < 0.01 | is.na(gnomAD_AF)
   )
 
-p_dataset
+write.table(pathogenic,
+            file = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/pathogenic_m6A_variants.tsv",
+            sep = "\t",
+            row.names = FALSE,
+            col.names = TRUE,
+            quote = FALSE)
+
 ```
+
 
 
 ### 3.2. Evaluate how the mutational status of the m6A machinery affect the expression of epitranscriptomic signatures (GOBP_MRNA_MODIFICATION, GOBP_RNA_MODIFICATION)
@@ -1000,7 +1026,6 @@ al paquetue GSVVA le meto los tpm y mis firmas. las firmas se sacande una lista 
 
 en GSEA msigdb puedo buscar firmas pero es un poco dificil. Estabilidad del mensajero. buscar mrna stability/ degradacion etc.
 
-
 ```{r}
 # Define gene sets
 gobp_rna_mod <- c("METTL15P1", "ADAR", "ADARB1", "EMG1", "ADARB2", "WDR4", "APOBEC2", "DUS4L", "WDR6", "KTI12", "RPUSD1", "HENMT1", "BUD23","TRMT61A", "TSR3", "FTSJ3", "MTFMT", "PUSL1", "TYW3", "TYW5", "METTL6", "ADAD1", "ADAT2", "APOBEC3D", "TRUB1", "BCDIN3D", "B3GNTL1", "PUS10", "TRMT44", "NSUN5P1", "TRMT10B", "AARS1", "ADAD2", "APOBEC3H", "DKC1", "TRDMT1", "METTL15", "APOBEC3A", "APOBEC3F", "AKT1", "FBL", "NSUN6", "JMJD6", "ELP5", "FTSJ1", "MTO1", "THUMPD3", "VIRMA", "NSUN5P2", "ELP4", "TRUB2", "RPUSD2", "DIMT1", "MOCS3", "APOBEC3C", "RPUSD3", "DPH3", "DTWD2", "ZCCHC4", "METTL5", "RBM15B", "MRM2", "A1CF", "HSD17B10", "HNRNPAB", "APOBEC1", "METTL2A", "FBLL1", "CTU2", "RAMACL", "NSUN4", "METTL1", "TYW1B", "NOP2", "PARN", "TPRKB", "SEPSECS", "METTL25B", "TFB1M", "TRMT112","TRMO", "LARP7", "TRMT6", "CDK5RAP1", "DNAJB11", "GAR1", "TRMT13", "RBM47", "PUS7", "ANKRD16", "TRIT1", "ELP6", "NSUN2", "CDKAL1", "DUS2", "TRMT10C", "THG1L", "TRMT61B", "TRMT12", "ELP3", "DALRD3", "MRM3", "NAT10", "ELP2", "TYW1", "NOP10", "TRMT1", "THUMPD1", "OSGEP", "NHP2", "TRMU", "NSUN5", "METTL2B", "MEPCE", "METTL3", "DUS3L", "DTWD1", "AICDA", "TRMT5", "TRMT9B", "METTL14", "APOBEC3G", "SARS1", "THADA", "NSUN3", "DUS1L", "OSGEPL1", "TFB2M", "RBM15", "METTL4", "SNRPB", "SNRPD1", "SNRPD2", "SNRPD3", "SNRPE", "SNRPF", "SNRPG", "SSB", "TARBP1", "METTL16", "QTRT2", "YRDC", "GTDC1", "METTL8", "MRM1", "TRMT2B", "PUS1", "THUMPD2", "URM1", "TRMT1L", "QTRT1", "PUS7L", "PUS3", "RAMAC", "QNG1", "GON7", "GTPBP3", "RPUSD4", "ELP1", "RNMT", "ALKBH1", "CTU1", "ALKBH8", "FDXACB1", "NAF1", "TRMT10A", "BAG4", "APOBEC3B", "WTAP", "TGS1", "LCMT2")
@@ -1010,8 +1035,6 @@ gobp_mrna_mod <- c("APOBEC2", "TRUB1", "DKC1", "VIRMA", "TRUB2", "RPUSD2", "A1CF
 GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY <- c("PATL2", "CNOT1", "CNOT6L", "PAN3", "CNOT2", "NBDY", "CNOT6", "PAN2")
 
 GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY <- c("CNOT1", "CNOT6L", "PAN3", "CNOT2", "CNOT6", "PAN2")
-
-GOCC_CHROMATOID_BODY <- c("TDRD5", "EIF4E", "TDRD6", "SMG1", "TDRD7", "DDX25", "BMAL1", "NSUN2", "PIWIL2", "TDRD1", "MAEL", "PIWIL1", "CLOCK")
 
 GOCC_P_BODY <- c("HAX1", "IGF2BP1", "IGF2BP3", "IGF2BP2", "PNRC1", "RBPMS", "LSM6", "WTIP", "DIS3L2", "TRIM71", "APOBEC3D", "RC3H1", "APOBEC3H", "DDX6", "DCP2", "AGO3", "AGO4", "DCP1B", "PATL2", "EIF4E", "ELAVL1", "APOBEC3A", "APOBEC3F", "C9orf72", "PATL1", "CNOT1", "SAMD4A", "TNRC6B", "SYNE1", "CARHSP1", "EDC4", "YTHDF3", "PAN3", "LSM4", "NOCT", "LSM14A", "AGO1", "AGO2", "LSM1", "LSM3", "TNRC6A", "APOBEC3C", "DCPS", "CNOT7", "NANOS2", "ZC3H12D", "NANOS3", "ISG20", "CAPRIN1", "MOV10", "CNOT2", "CNOT3", "YBX1", "YTHDF2", "BTBD1", "POLR2G", "XRN1", "RC3H2", "YTHDF1", "NBDY", "SAMD4B", "SHFL", "PNRC2", "BTBD2", "DCP1A", "UBAP2", "EIF4ENIF1", "PSMA2", "PSMA4", "PSMA6", "PSMC2", "PSMC3", "AICDA", "TNRC6C", "LSM2","UPF1", "APOBEC3G", "CPEB1", "TRIM21", "ZFP36L1", "TOP1", "ZFP36", "CSDE1", "FAM184A", "LIN28A", "ZC3H12A", "EDC3", "MEX3B", "AJUBA", "TRIM5", "SQSTM1", "LIMD1", "CNOT9", "MEX3A", "CNOT8", "EIF4E2", "APOBEC3B", "PUM1", "GARRE1", "PAN2")
 
@@ -1033,21 +1056,24 @@ gene_sets <- list(GOBP_RNA_MODIFICATION = gobp_rna_mod,
                   GOBP_MRNA_MODIFICATION = gobp_mrna_mod,
                   GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY = GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY, 
                   GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY = GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY,
-                  GOCC_CHROMATOID_BODY = GOCC_CHROMATOID_BODY,
                   GOCC_P_BODY = GOCC_P_BODY,
                   GOBP_MIRNA_PROCESSING = GOBP_MIRNA_PROCESSING,
                   GOBP_RNA_STABILIZATION = GOBP_RNA_STABILIZATION,
                   GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING = GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING
                   )
+```
+
+
+```{r}
 
 merged_rna_clinical$TPM <- as.numeric(merged_rna_clinical$TPM)
 
 # Convert TPM values into a matrix with genes as rows and samples as columns
 tpm_df <- merged_rna_clinical %>%
-  dplyr::select(Gene, Sample, Expression) %>%
+  dplyr::select(Gene, Sample, TPM) %>%
   pivot_wider(
     names_from = Sample,
-    values_from = Expression,
+    values_from = TPM,
     values_fn = mean
   ) %>%
   column_to_rownames(var = "Gene")
@@ -1070,24 +1096,160 @@ selected_pathways <- c("GOBP_RNA_MODIFICATION",
                   "GOBP_MRNA_MODIFICATION",
                   "GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY",
                   "GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY",
-                  "GOCC_CHROMATOID_BODY",
                   "GOCC_P_BODY",
                   "GOBP_MIRNA_PROCESSING",
                   "GOBP_RNA_STABILIZATION",
                   "GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING" )
 heatmap_matrix <- gsva_scores[selected_pathways, ]
 
-# Hacer heatmap
-pheatmap(heatmap_matrix,
-         scale = "row",  # Normaliza por firma
-      #   annotation_col = annotation_data,
-         cluster_rows = TRUE,
-         cluster_cols = TRUE,
-         show_colnames = FALSE,
-         fontsize_row = 10,
-         color = colorRampPalette(c("navy", "white", "firebrick3"))(100))
+annotation_data <- merged_rna_clinical %>%
+  dplyr::select(Sample, response_TAC1, sex, smoking_status) %>%
+  distinct() %>%
+  column_to_rownames("Sample")
 
+# Asegúrate de que las muestras estén en el mismo orden que en el heatmap_matrix
+annotation_data$smoking_status <- factor(annotation_data$smoking_status,
+                                          levels = c("smoker", "former_smoker", "never_smoker", "Unknown"))
+annotation_data <- annotation_data[colnames(heatmap_matrix), ]
+
+# Define colores para las anotaciones
+ann_colors <- list(
+  response_TAC1 = c("responder" = "green", "non_responder" = "red", "Unknown" = "grey80"),
+  sex = c("male" = "orchid1", "female" = "skyblue"),
+  smoking_status = c("smoker" = "red", "former_smoker" = "orange", "never_smoker" = "blue", "Unknown" = "lightgrey")
+)
+
+# Crear objeto HeatmapAnnotation
+top_annotation <- HeatmapAnnotation(
+  df = annotation_data,
+  col = ann_colors,
+  annotation_legend_param = list(title_gp = gpar(fontsize = 10), labels_gp = gpar(fontsize = 8))
+)
+
+# -----------------------------------
+# Crear Heatmap con ComplexHeatmap
+# -----------------------------------
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Firm_heatmap.png", width = 4000, height = 3000, res = 300)
+
+Heatmap(
+  matrix = heatmap_matrix,
+  name = "GSVA score",
+  col = colorRamp2(c(-2, 0, 2), c("navy", "white", "firebrick3")),
+  top_annotation = top_annotation,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 10),
+  column_names_gp = gpar(fontsize = 8),
+  column_title = "Epitranscriptomic Signatures (GSVA)",
+  column_title_gp = gpar(fontsize = 14, fontface = "bold")
+)
+dev.off()
 ```
+
+Mismo código pero para pacientes WES. Creamos nueva gsva para ello: 
+
+
+```{r}
+# Leer variantes patogénicas
+pathogenic <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/pathogenic_m6A_variants.tsv")
+
+# Pacientes WES válidos
+wes_patients <- unique(merged_rna_clinical$Tumor_Sample_Barcode)
+wes_patients <- wes_patients[wes_patients != ""]
+
+# Filtrar datos de expresión para solo esos pacientes
+wes_rna_clinical <- merged_rna_clinical %>%
+  filter(Tumor_Sample_Barcode %in% wes_patients)
+
+# Crear columna de ID limpio desde Sample (quitando "RNA_FFPE_")
+wes_rna_clinical <- wes_rna_clinical %>%
+  mutate(Sample_clean = gsub("RNA_FFPE_", "", Sample))
+
+
+# Crear matriz TPM para GSVA
+tpm_df_wes <- wes_rna_clinical %>%
+  dplyr::select(Gene, Sample, TPM) %>%
+  pivot_wider(names_from = Sample, values_from = TPM, values_fn = mean) %>%
+  column_to_rownames(var = "Gene")
+tpm_matrix_wes <- as.matrix(tpm_df_wes)
+tpm_matrix_wes[is.na(tpm_matrix_wes)] <- 0
+
+# GSVA
+gsva.param_wes <- gsvaParam(exprData = tpm_matrix_wes, geneSets = gene_sets)
+gsva_scores_wes <- gsva(gsva.param_wes, verbose = FALSE)
+
+# Subset epitranscriptomic signatures
+selected_pathways <- c("GOBP_RNA_MODIFICATION",
+                       "GOBP_MRNA_MODIFICATION",
+                       "GOBP_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY",
+                       "GOBP_POSITIVE_REGULATION_OF_CYTOPLASMIC_MRNA_PROCESSING_BODY_ASSEMBLY",
+                       "GOCC_P_BODY",
+                       "GOBP_MIRNA_PROCESSING",
+                       "GOBP_RNA_STABILIZATION",
+                       "GOBP_REGULATORY_NCRNA_MEDIATED_GENE_SILENCING")
+heatmap_matrix_wes <- gsva_scores_wes[selected_pathways, ]
+
+# Crear anotaciones clínicas usando Sample_clean
+annotation_data_wes <- wes_rna_clinical %>%
+  dplyr::select(Sample_clean, response_TAC1, sex, smoking_status) %>%
+  distinct() %>%
+  column_to_rownames("Sample_clean")
+
+
+# Añadir columna de mutaciones patogénicas
+# Convertir barcodes de mutaciones patogénicas a carácter si no lo son
+patients_with_pathogenic <- unique(as.character(pathogenic$Tumor_Sample_Barcode))
+
+# Anotar si hay mutaciones patogénicas
+annotation_data_wes$pathogenic_mutation <- ifelse(rownames(annotation_data_wes) %in% patients_with_pathogenic, "Yes", "No")
+
+# Definir niveles de factores
+annotation_data_wes$smoking_status <- factor(annotation_data_wes$smoking_status,
+                                             levels = c("smoker", "former_smoker", "never_smoker", "Unknown"))
+annotation_data_wes$pathogenic_mutation <- factor(annotation_data_wes$pathogenic_mutation, levels = c("Yes", "No"))
+
+# Alinear nombres con matriz TPM (quitando "RNA_FFPE_" para que coincidan)
+colnames(heatmap_matrix_wes) <- gsub("RNA_FFPE_", "", colnames(heatmap_matrix_wes))
+annotation_data_wes <- annotation_data_wes[colnames(heatmap_matrix_wes), ]
+
+# Colores para anotaciones
+ann_colors <- list(
+  response_TAC1 = c("responder" = "green", "non_responder" = "red", "Unknown" = "grey80"),
+  sex = c("male" = "orchid1", "female" = "skyblue"),
+  smoking_status = c("smoker" = "red", "former_smoker" = "orange", "never_smoker" = "blue", "Unknown" = "lightgrey"),
+  pathogenic_mutation = c("Yes" = "black", "No" = "white")
+)
+
+# Anotación superior del heatmap
+top_annotation_wes <- HeatmapAnnotation(
+  df = annotation_data_wes,
+  col = ann_colors,
+  annotation_legend_param = list(title_gp = gpar(fontsize = 10),
+                                 labels_gp = gpar(fontsize = 8))
+)
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Firm_heatmap_wes.png", width = 4000, height = 3000, res = 300)
+
+Heatmap(
+  matrix = heatmap_matrix_wes,
+  name = "GSVA score",
+  col = colorRamp2(c(-2, 0, 2), c("navy", "white", "firebrick3")),
+  top_annotation = top_annotation_wes,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 10),
+  column_names_gp = gpar(fontsize = 8),
+  column_title = "Epitranscriptomic Signatures (GSVA)",
+  column_title_gp = gpar(fontsize = 14, fontface = "bold")
+)
+dev.off()
+```
+
 
 
 # Objective 2: To evaluate whether there is a dysregulation of the m6A machinery that could serve as a biomarker of response to immunotherapy in RCC patients.
@@ -1161,6 +1323,8 @@ penrichr_results <- enrichr(pjustNonResp_strict$Hugo_Symbol, c('MSigDB_Hallmark_
 
 
 ### 1.2. Identify specific variants that are exclusively present in responders and non-responders to immunotherapy 
+	
+	
 	
 	
 	
