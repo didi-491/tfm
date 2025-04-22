@@ -346,12 +346,14 @@ rm(list = setdiff(ls(), "allNonConflictive_data"))
 Para calcular las frecuencias alelicas usamos este codigo: 
 
 ```{r}
-ggplot(filtered, aes(x = t_AF)) +
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Variants_Histograms_raw.png", width = 2000, height = 1000, res = 300)
+ggplot(allNonConflictive_data, aes(x = t_AF)) +
   geom_histogram(binwidth = 0.05, fill = "coral1", color = "black", alpha = 0.7) +
   labs(title = "Allele Frequencies Distribution)",
        x = "Allele Frequencies",
        y = "Variants Number") +
   theme_minimal()
+dev.off()
 ```
 
 Nos han salido dos picos muy altos en 0.5 y 0.7. Primero creamos en este paso los subset de mafs y probamos distintos filtos seleccionando finalmente: 
@@ -494,7 +496,7 @@ dev.off()
 Para el oncoplot usamos el .maf con sus datos clinicos
 
 ```{r}
-# Cargar el archivo TSV
+# Cargar el archivo
 maf_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A.maf"
 clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized_maf.txt"
 vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
@@ -902,11 +904,17 @@ protein_effect_mutations <- c("Missense_Mutation",
 m6A_protein_effect_mutations <- subsetMaf(maf = m6A_maf, 
                                           query = paste0("Variant_Classification %in% c('",                                                  paste(protein_effect_mutations, collapse = "','"), 
                                                          "')"))
+
+write.table(m6A_protein_effect_mutations@data, 
+            file = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/m6A_proteffect.maf",
+            sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
 ```
 
 
 realizamos un oncoplot
 ```{r}
+# he utilizado la modificacion de la chunk 17 para el oncoplot para que se vea unknown en la leyenda
+
 # Definir colores oncoplot
 color.palette <- list(
   smoking_status = c("smoker" = "red", 
@@ -924,7 +932,7 @@ color.palette <- list(
 png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/perfil_mut_proteffect.png", width = 2000, height = 2000, res = 300)
 
 oncoplot(maf = m6A_protein_effect_mutations, 
-         top = 10,  
+         top = 52,  
          draw_titv = TRUE,  
          clinicalFeatures = c("response_TAC1", "smoking_status", "sex"),  
          annotationColor = color.palette,
@@ -933,7 +941,8 @@ oncoplot(maf = m6A_protein_effect_mutations,
          showTumorSampleBarcodes = TRUE,
          legendFontSize = 1,  
          annotationFontSize = 1,
-         titleFontSize = 1)  
+         titleFontSize = 1,
+          titleText = "Oncoplot of m6A machinery genes variant with a protein effect. Altered in 9 of 18 patients (50%)") 
 
 dev.off()
 ```
@@ -965,24 +974,35 @@ deleterious: Likely to have a phenotypic effect
 deleterious_low_confidence: Less likely to have a phenotypic effect than 'deleterious'
 
 ```{r}
-# Tipos de mutaciones que afectan la proteína
-protein_effect_mutations <- c("Missense_Mutation", 
-                              "Nonsense_Mutation", 
-                              "Frame_Shift_Del", 
-                              "Frame_Shift_Ins", 
-                              "Splice_Site")
-
 # Filtrado estricto: TODAS las condiciones deben cumplirse
-pathogenic <- m6A_maf@data %>%
-  filter(
-    Variant_Classification %in% protein_effect_mutations,
-    grepl("deleterious", SIFT, ignore.case = TRUE),
-    grepl("damaging", PolyPhen, ignore.case = TRUE),
-    IMPACT != "LOW",
-    gnomAD_AF < 0.01 | is.na(gnomAD_AF)
-  )
+pathogenic <- subsetMaf(
+  maf = m6A_protein_effect_mutations,
+  query = "grepl('deleterious', SIFT, ignore.case=TRUE) &
+           grepl('damaging', PolyPhen, ignore.case=TRUE) &
+           (IMPACT != 'LOW') &
+           (is.na(gnomAD_AF) | gnomAD_AF < 0.01)"
+)
 
-write.table(pathogenic,
+# Oncoplot
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/perfil_mut_pathogenic.png", width = 2000, height = 2000, res = 300)
+
+oncoplot(maf = pathogenic, 
+         top = 52,  
+         draw_titv = TRUE,  
+         clinicalFeatures = c("response_TAC1", "smoking_status", "sex"),  
+         annotationColor = color.palette,
+         sortByAnnotation = TRUE, 
+         fontSize = 0.8,
+         showTumorSampleBarcodes = TRUE,
+         legendFontSize = 1,  
+         annotationFontSize = 1,
+         titleFontSize = 1,
+          titleText = "Oncoplot of m6A machinery genes variant with a protein effect. Altered in 7 of 18 patients (38.89%)") 
+
+dev.off()
+
+
+write.table(pathogenic@data,
             file = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/pathogenic_m6A_variants.tsv",
             sep = "\t",
             row.names = FALSE,
@@ -1090,6 +1110,13 @@ gsva_scores <- gsva(gsva.param, verbose = F)
 
 ```
 
+Comprobar rango de GSVA_score y modificar pa que no se vea tan clarito
+
+```{r}
+summary(gsva_scores)
+```
+
+
 ```{r}
 # Escoge solo las firmas epitranscriptómicas
 selected_pathways <- c("GOBP_RNA_MODIFICATION",
@@ -1135,7 +1162,7 @@ png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Firm_heatmap.pn
 Heatmap(
   matrix = heatmap_matrix,
   name = "GSVA score",
-  col = colorRamp2(c(-2, 0, 2), c("navy", "white", "firebrick3")),
+  col = colorRamp2(c(-0.8, 0, 0.8), c("blue", "white", "red")),
   top_annotation = top_annotation,
   cluster_rows = TRUE,
   cluster_columns = TRUE,
@@ -1144,7 +1171,9 @@ Heatmap(
   row_names_gp = gpar(fontsize = 10),
   column_names_gp = gpar(fontsize = 8),
   column_title = "Epitranscriptomic Signatures (GSVA)",
-  column_title_gp = gpar(fontsize = 14, fontface = "bold")
+  column_title_gp = gpar(fontsize = 14, fontface = "bold"),
+  clustering_distance_rows = "euclidean",
+  clustering_distance_columns = "euclidean"
 )
 dev.off()
 ```
@@ -1236,7 +1265,7 @@ png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Firm_heatmap_we
 Heatmap(
   matrix = heatmap_matrix_wes,
   name = "GSVA score",
-  col = colorRamp2(c(-2, 0, 2), c("navy", "white", "firebrick3")),
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
   top_annotation = top_annotation_wes,
   cluster_rows = TRUE,
   cluster_columns = TRUE,
@@ -1260,72 +1289,193 @@ dev.off()
 
 ### 1.1. Identify genes that are exclusively mutated in responders and non-responders to immunotherapy 
 
+Ir a chunk 15 para descargar los datos en el entorno.
+
 ```{r}
 # Separar datos en respondedores y no respondedores
-clinical_data <- merged_data@clinical.data  
+
 responders <- clinical_data %>% filter(response_TAC1 == "responder") %>% pull(Tumor_Sample_Barcode)
 non_responders <- clinical_data %>% filter(response_TAC1 == "non_responder") %>% pull(Tumor_Sample_Barcode)
 
-# Filtrar mutaciones para respondedores
-resp_mutated_genes <- merged_data@data %>% 
+# Opción 2: Usando summarise directamente
+
+# Respondedores
+resp_mutated_genes <- m6A_maf@data %>%
   filter(Tumor_Sample_Barcode %in% responders) %>%
   group_by(Hugo_Symbol, Tumor_Sample_Barcode) %>%
-  count()
+  summarise(nbVariants = n(), .groups = "drop")
 
-colnames(resp_mutated_genes)[3] <- "nbVariants"
+nbSamples_gene_resp <- resp_mutated_genes %>%
+  group_by(Hugo_Symbol) %>%
+  summarise(n_samples = n(), .groups = "drop")
 
-nbSamples_gene_resp <- resp_mutated_genes %>% group_by(Hugo_Symbol) %>% count()
-nbVariants_gene_resp <- resp_mutated_genes %>% group_by(Hugo_Symbol) %>% summarise(nbVariants = sum(nbVariants))
+nbVariants_gene_resp <- resp_mutated_genes %>%
+  group_by(Hugo_Symbol) %>%
+  summarise(nbVariants = sum(nbVariants), .groups = "drop")
 
-# Filtrar mutaciones para no respondedores
-nonResp_mutated_genes <- merged_data@data %>% 
+
+# No respondedores
+nonResp_mutated_genes <- m6A_maf@data %>%
   filter(Tumor_Sample_Barcode %in% non_responders) %>%
   group_by(Hugo_Symbol, Tumor_Sample_Barcode) %>%
-  count()
+  summarise(nbVariants = n(), .groups = "drop")
 
-colnames(nonResp_mutated_genes)[3] <- "nbVariants"
+nbSamples_gene_nonResp <- nonResp_mutated_genes %>%
+  group_by(Hugo_Symbol) %>%
+  summarise(n_samples = n(), .groups = "drop")
 
-nbSamples_gene_nonResp <- nonResp_mutated_genes %>% group_by(Hugo_Symbol) %>% count()
-nbVariants_gene_nonResp <- nonResp_mutated_genes %>% group_by(Hugo_Symbol) %>% summarise(nbVariants = sum(nbVariants))
-
-
-```
-
-
-```{r}
-head(nbSamples_gene_resp)
-head(nbVariants_gene_resp)
-head(nbSamples_gene_nonResp)
-head(nbVariants_gene_nonResp)
-```
+nbVariants_gene_nonResp <- nonResp_mutated_genes %>%
+  group_by(Hugo_Symbol) %>%
+  summarise(nbVariants = sum(nbVariants), .groups = "drop")
 
 
-```{r}
-pmultipleResp <- resp_mutated_genes[resp_mutated_genes$n > 1,]
-pmultipleNonResp <- nonResp_mutated_genes[nonResp_mutated_genes$n > 1,]
+write.table(resp_mutated_genes, 'Results/allMutatedGenes_responders.tsv', col.names = T, row.names = F, quote=F, sep='\t')
 
+write.table(nonResp_mutated_genes, 'Results/allMutatedGenes_non_responders.tsv', col.names = T, row.names = F, quote=F, sep='\t')
 
-pjustResp <- pmultipleResp[!(pmultipleResp$Hugo_Symbol %in% pmultipleNonResp$Hugo_Symbol),]
+# Genes con múltiples mutaciones por paciente. Esto esta copiado de jenny pero no quiero hacerlo 
+pmultipleResp <- resp_mutated_genes[resp_mutated_genes$nbVariants >= 1, ]
+pmultipleNonResp <- nonResp_mutated_genes[nonResp_mutated_genes$nbVariants >= 1, ]
 
-pjustResp_strict <- pmultipleResp[!(pmultipleResp$Hugo_Symbol %in% pnonResp_mutated_genes$Hugo_Symbol),]
+# Genes mutados múltiples veces solo en respondedores
+pjustResp <- pmultipleResp[!(pmultipleResp$Hugo_Symbol %in% pmultipleNonResp$Hugo_Symbol), ]
 
+# Versión estricta: excluye todos los genes que aparecen en los no respondedores
+pjustResp_strict <- pmultipleResp[!(pmultipleResp$Hugo_Symbol %in% nonResp_mutated_genes$Hugo_Symbol), ]
 
-pjustNonResp <- pmultipleNonResp[!(pmultipleNonResp$Hugo_Symbol %in% pmultipleResp$Hugo_Symbol),]
-pjustNonResp_strict <- pmultipleNonResp[!(pmultipleNonResp$Hugo_Symbol %in% presp_mutated_genes$Hugo_Symbol),]
+# Genes mutados múltiples veces solo en no respondedores
+pjustNonResp <- pmultipleNonResp[!(pmultipleNonResp$Hugo_Symbol %in% pmultipleResp$Hugo_Symbol), ]
 
-penrichr_results <- enrichr(pjustResp_strict$Hugo_Symbol, c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational','BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+# Versión estricta: excluye todos los genes que aparecen en los respondedores
+pjustNonResp_strict <- pmultipleNonResp[!(pmultipleNonResp$Hugo_Symbol %in% resp_mutated_genes$Hugo_Symbol), ]
 
-penrichr_results <- enrichr(pjustNonResp_strict$Hugo_Symbol, c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational','BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+write.table(pjustResp_strict,
+            file = "results/pjustResp_strict.tsv",
+            sep = "\t", row.names = FALSE, quote = FALSE)
 
-
+# Guardar genes con múltiples mutaciones solo en no respondedores (estricto)
+write.table(pjustNonResp_strict,
+            file = "results/pjustNonResp_strict.tsv",
+            sep = "\t", row.names = FALSE, quote = FALSE)
 
 ```
 
 
 ### 1.2. Identify specific variants that are exclusively present in responders and non-responders to immunotherapy 
+
+```{r}
+# Separar datos en respondedores y no respondedores
+
+responders <- clinical_data %>% filter(response_TAC1 == "responder") %>% pull(Tumor_Sample_Barcode)
+non_responders <- clinical_data %>% filter(response_TAC1 == "non_responder") %>% pull(Tumor_Sample_Barcode)
+
+# Opción 2: Usando summarise directamente
+
+# Respondedores
+resp_mutated_genes <- m6A_maf@data %>%
+  filter(Tumor_Sample_Barcode %in% responders) %>%
+  group_by( shortVariantID, Tumor_Sample_Barcode) %>%
+  summarise(nbVariants = n(), .groups = "drop")
+
+nbSamples_gene_resp <- resp_mutated_genes %>%
+  group_by( shortVariantID) %>%
+  summarise(n_samples = n(), .groups = "drop")
+
+nbVariants_gene_resp <- resp_mutated_genes %>%
+  group_by( shortVariantID) %>%
+  summarise(nbVariants = sum(nbVariants), .groups = "drop")
+
+
+# No respondedores
+nonResp_mutated_genes <- m6A_maf@data %>%
+  filter(Tumor_Sample_Barcode %in% non_responders) %>%
+  group_by( shortVariantID, Tumor_Sample_Barcode) %>%
+  summarise(nbVariants = n(), .groups = "drop")
+
+nbSamples_gene_nonResp <- nonResp_mutated_genes %>%
+  group_by( shortVariantID) %>%
+  summarise(n_samples = n(), .groups = "drop")
+
+nbVariants_gene_nonResp <- nonResp_mutated_genes %>%
+  group_by( shortVariantID) %>%
+  summarise(nbVariants = sum(nbVariants), .groups = "drop")
+
+
+write.table(resp_mutated_genes, 'Results/all_variants_responders.tsv', col.names = T, row.names = F, quote=F, sep='\t')
+
+write.table(nonResp_mutated_genes, 'Results/all_variants_responders.tsv', col.names = T, row.names = F, quote=F, sep='\t')
+
+# Genes con múltiples mutaciones por paciente. Esto esta copiado de jenny pero no quiero hacerlo 
+pmultipleResp <- resp_mutated_genes[resp_mutated_genes$nbVariants >= 1, ]
+pmultipleNonResp <- nonResp_mutated_genes[nonResp_mutated_genes$nbVariants >= 1, ]
+
+# Genes mutados múltiples veces solo en respondedores
+pjustResp <- pmultipleResp[!(pmultipleResp$ shortVariantID %in% pmultipleNonResp$ shortVariantID), ]
+
+# Versión estricta: excluye todos los genes que aparecen en los no respondedores
+pjustResp_strict <- pmultipleResp[!(pmultipleResp$ shortVariantID %in% nonResp_mutated_genes$ shortVariantID), ]
+
+# Genes mutados múltiples veces solo en no respondedores
+pjustNonResp <- pmultipleNonResp[!(pmultipleNonResp$ shortVariantID %in% pmultipleResp$ shortVariantID), ]
+
+# Versión estricta: excluye todos los genes que aparecen en los respondedores
+pjustNonResp_strict <- pmultipleNonResp[!(pmultipleNonResp$ shortVariantID %in% resp_mutated_genes$ shortVariantID), ]
+
+write.table(pjustResp_strict,
+            file = "results/pjustResp_variant.tsv",
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Guardar genes con múltiples mutaciones solo en no respondedores (estricto)
+write.table(pjustNonResp_strict,
+            file = "results/pjustNonResp_variant.tsv",
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+```
+
+## 2. To identify differentially expressed genes from the m6A machinery associated with immunotherapy response
+
+### 2.1. Differential expression analysis between responder and non-responder patients 
+
+```{r}
+
+# COMPARISON RESP VS NONRESP
+pmultipleResp <- presp_variants[presp_variants$n > 1,]
+pmultipleNonResp <- pnonResp_variants[pnonResp_variants$n > 1,]
+
+
+pvarjustResp_strict <- pmultipleResp[!(pmultipleResp$variantID_noSample %in% pnonResp_variants$variantID_noSample),]
+write.table(pvarjustResp_strict, 'Results/potentiallyPathogenic/strictlyExclusivelyMutatedVariants_responders.tsv', sep='\t', quote=F, col.names=T, row.names=F)
+
+
+pvarjustNonResp_strict <- pmultipleNonResp[!(pmultipleNonResp$variantID_noSample %in% presp_variants$variantID_noSample),]
+write.table(pvarjustNonResp_strict, 'Results/potentiallyPathogenic/strictlyExclusivelyMutatedVariants_nonResponders.tsv', sep='\t', quote=F, col.names=T, row.names=F)
+
+```
+
+
+### 2.2. Gene set enrichment analysis to identify epitranscriptomic-related pathways associated to immunotherapy response
+
+```{r}
+# Enriquecimiento para respondedores
+penrichr_resp <- enrichr(pjustResp_strict$Hugo_Symbol, 
+                         c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational',
+                           'BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 
+                           'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 
+                           'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+
+# Enriquecimiento para no respondedores
+penrichr_nonresp <- enrichr(pjustNonResp_strict$Hugo_Symbol, 
+                            c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational',
+                              'BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 
+                              'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 
+                              'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+```
+
+
+### 2.3. Compare gene expression profiles of the m6A machinery between responders and non-responders 
+
 	
-	
-	
+
 	
 	
 	
