@@ -1,0 +1,37 @@
+---
+title: "Untitled"
+author: "Diana Campos López"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(maftools)
+
+vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
+               "Frame_Shift_Del", "Frame_Shift_Ins", "Nonstop_Mutation", 
+               "Translation_Start_Site", "In_Frame_Ins", "In_Frame_Del", 
+               "Missense_Mutation", "Intron", "Splice_Region", "Silent", 
+               "RNA", "5'UTR", "3'UTR", "IGR", "5'Flank", "3'Flank")
+
+merged_data <- read.maf(maf = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/merged_data.maf", vc_nonSyn = vc_nonsyn )
+
+all_data <- merged_data@data
+
+
+coding_data<-all_data[all_data$Consequence != 'regulatory_region_variant' &
+                           all_data$Consequence != 'intergenic_variant'&
+                           all_data$Consequence != 'intron_variant',]
+
+tmbCoding <- table(coding_data$Tumor_Sample_Barcode)/10^6
+
+write.table(tmbCoding, row.names = F, quote = F, "tmb.txt")
+
+tmbCoding
+
+```
+

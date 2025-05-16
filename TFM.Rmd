@@ -13,30 +13,34 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r, library, message=FALSE, warning=FALSE}
 library(maftools)
+library(readxl)
 library(ggplot2)
-#library(forcats)
-#library(xlsx)
 library(dplyr)
 library(GenomicRanges)
-# library(BSgenome.Hsapiens.UCSC.hg19)
-#library(NMF)
-#library(pheatmap)
 library(data.table)
-# library(enrichR)
-#library(paletteer)
 library(circlize)
-#library(vidger)
-#library(ggpubr)
 library(scales)
 library(ComplexHeatmap)
 library(tidyr)
 library(patchwork)
-#library(gdata)
 library(stringr)
 library(ggrepel) 
 library(tidyverse)
 library(VariantAnnotation)
 library(GSVA)
+library(DESeq2)
+library(tibble)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(readr)
+library(survival)
+library(survminer)
+library(signatureSearch)
+library(survival)
+library(forestplot)
+library(magrittr)
+library(broom)
 
 ```
 
@@ -346,10 +350,10 @@ rm(list = setdiff(ls(), "allNonConflictive_data"))
 Para calcular las frecuencias alelicas usamos este codigo: 
 
 ```{r}
-png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Variants_Histograms_raw.png", width = 2000, height = 1000, res = 300)
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Variants_Histograms_raw.png", width = 1500, height = 1000, res = 300)
 ggplot(allNonConflictive_data, aes(x = t_AF)) +
-  geom_histogram(binwidth = 0.05, fill = "coral1", color = "black", alpha = 0.7) +
-  labs(title = "Allele Frequencies Distribution)",
+  geom_histogram(binwidth = 0.05, fill = "indianred1", color = "black", alpha = 0.5) +
+  labs(title = "Allele Frequencies Distribution",
        x = "Allele Frequencies",
        y = "Variants Number") +
   theme_minimal()
@@ -396,6 +400,7 @@ write.table(m6A_data,
 
 ```
 
+merged_data.maf tiene guardados los filtros tdepth taltcount y no intron, mientras que all_non_conflictive_data no los tiene.
 
 ```{r}
 vc_nonsyn <- c("Targeted_Region", "Splice_Site", "Nonsense_Mutation", 
@@ -408,12 +413,14 @@ merged_data <- read.maf(maf = "D:/didic/Documents/Documentos/Master UOC/Cuatri 2
 
 
 # Crear histograma
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Variants_Histograms.png", width = 2000, height = 1000, res = 300)
 ggplot(merged_data@data, aes(x = t_AF)) +
   geom_histogram(binwidth = 0.05, fill = "indianred1", color = "black", alpha = 0.7) +
-  labs(title = "Allele Frequencies Distribution)",
+  labs(title = "Allele Frequencies Distribution",
        x = "Allele Frequencies",
        y = "Variants Number") +
   theme_minimal()
+dev.off()
 ```
 
 Código histogramas de cantidad de variaciones: 
@@ -823,7 +830,7 @@ rna_m6a_expression <- rna_m6a_expression %>%
 
 # TPM Heatmap Preparation
 rna_m6a_matrix <- rna_m6a_expression %>%
-  select(Sample, Gene, TPM) %>%
+  dplyr::select(Sample, Gene, TPM) %>%
   spread(Sample, TPM)  
 
 # Convert to matrix & keep `sample_ID`
@@ -835,12 +842,12 @@ rna_m6a_matrix_scaled <- t(scale(t(rna_m6a_matrix)))
 
 # Clinical Annotations (Including `sample_ID`)
 annotation_col <- merged_rna_clinical %>%
-  select(Sample, sample_ID, response_TAC1, sex, smoking_status) %>%
+  dplyr::select(Sample, sample_ID, response_TAC1, sex, smoking_status) %>%
   distinct() 
 
 # Set `Sample` as rownames for heatmap annotations
 rownames(annotation_col) <- annotation_col$Sample  
-annotation_col <- annotation_col %>% select(-Sample)  
+annotation_col <- annotation_col %>% dplyr::select(-Sample)  
 
 # 🔹 **Define annotation colors**
 ann_colors <- list(
@@ -866,7 +873,6 @@ Heatmap(
 dev.off()
 
 ```
-
 
 ## 3. To evaluate if the somatic mutations have an effect on gene expression
 
@@ -977,9 +983,7 @@ deleterious_low_confidence: Less likely to have a phenotypic effect than 'delete
 # Filtrado estricto: TODAS las condiciones deben cumplirse
 pathogenic <- subsetMaf(
   maf = m6A_protein_effect_mutations,
-  query = "grepl('deleterious', SIFT, ignore.case=TRUE) &
-           grepl('damaging', PolyPhen, ignore.case=TRUE) &
-           (IMPACT != 'LOW') &
+  query = "(IMPACT != 'LOW') &
            (is.na(gnomAD_AF) | gnomAD_AF < 0.01)"
 )
 
@@ -1260,6 +1264,10 @@ top_annotation_wes <- HeatmapAnnotation(
                                  labels_gp = gpar(fontsize = 8))
 )
 
+
+```
+
+```{r}
 png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Firm_heatmap_wes.png", width = 4000, height = 3000, res = 300)
 
 Heatmap(
@@ -1273,12 +1281,181 @@ Heatmap(
   show_column_names = TRUE,
   row_names_gp = gpar(fontsize = 10),
   column_names_gp = gpar(fontsize = 8),
+  clustering_distance_rows = "euclidean",  
+  clustering_method_rows = "ward.D",
   column_title = "Epitranscriptomic Signatures (GSVA)",
   column_title_gp = gpar(fontsize = 14, fontface = "bold")
 )
 dev.off()
 ```
 
+Otros datos clinicos
+
+```{r}
+# Crear anotaciones clínicas usando Sample_clean
+annotation_data_wes <- wes_rna_clinical %>%
+  dplyr::select(Sample_clean, response_TAC1, sex, smoking_status, age, stage) %>%
+  distinct() %>%
+  column_to_rownames("Sample_clean")
+
+# Añadir columna de mutaciones patogénicas
+patients_with_pathogenic <- unique(as.character(pathogenic$Tumor_Sample_Barcode))
+annotation_data_wes$pathogenic_mutation <- ifelse(rownames(annotation_data_wes) %in% patients_with_pathogenic, "Yes", "No")
+
+# Convertir a factor y establecer niveles
+annotation_data_wes$smoking_status <- factor(annotation_data_wes$smoking_status,
+                                             levels = c("smoker", "former_smoker", "never_smoker", "Unknown"))
+annotation_data_wes$pathogenic_mutation <- factor(annotation_data_wes$pathogenic_mutation, levels = c("Yes", "No"))
+
+# Definir colores para anotaciones categóricas
+ann_colors <- list(
+  response_TAC1 = c("responder" = "green", "non_responder" = "red", "Unknown" = "grey80"),
+  sex = c("male" = "orchid1", "female" = "skyblue"),
+  smoking_status = c("smoker" = "red", "former_smoker" = "orange", "never_smoker" = "blue", "Unknown" = "lightgrey"),
+  pathogenic_mutation = c("Yes" = "black", "No" = "white"),
+  stage = c("I" = "lightgreen", "II" = "skyblue", "III" = "orange", "IV" = "indianred1", "Unknown" = "lightgrey") # Modifica según tus niveles reales
+)
+
+# Alinear nombres
+colnames(heatmap_matrix_wes) <- gsub("RNA_FFPE_", "", colnames(heatmap_matrix_wes))
+annotation_data_wes <- annotation_data_wes[colnames(heatmap_matrix_wes), ]
+
+# Crear anotación del heatmap
+top_annotation_wes <- HeatmapAnnotation(
+  df = annotation_data_wes,
+  col = ann_colors,
+  annotation_legend_param = list(title_gp = gpar(fontsize = 10),
+                                 labels_gp = gpar(fontsize = 8))
+)
+
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Firm_clinical2_wes.png", width = 4000, height = 3000, res = 300)
+
+Heatmap(
+  matrix = heatmap_matrix_wes,
+  name = "GSVA score",
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+  top_annotation = top_annotation_wes,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 10),
+  column_names_gp = gpar(fontsize = 8),
+  clustering_distance_rows = "euclidean",  
+  clustering_method_rows = "ward.D",
+  column_title = "Epitranscriptomic Signatures (GSVA)",
+  column_title_gp = gpar(fontsize = 14, fontface = "bold")
+)
+dev.off()
+```
+
+```{r}
+
+
+# 1. Leer las anotaciones de tipo Writer/Reader/Eraser
+epitranscriptomic_genes <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/epitranscriptomic_regulators_annotated.txt")
+
+# 2. Añadir categoría funcional a las variantes
+pathogenic_annotated <- pathogenic %>%
+  left_join(epitranscriptomic_genes, by = c("Hugo_Symbol" = "Gene_symbol"))
+
+# 3. Crear tabla binaria: ¿cada paciente tiene mutación de tipo Writer, Reader, Eraser?
+mutation_types_by_patient <- pathogenic_annotated %>%
+  filter(!is.na(Function)) %>%
+  mutate(Sample_clean = gsub("RNA_FFPE_", "", Tumor_Sample_Barcode)) %>%
+  group_by(Sample_clean, Function) %>%
+  summarise(has_mutation = TRUE, .groups = "drop") %>%
+  pivot_wider(names_from = Function, values_from = has_mutation, values_fill = list(has_mutation = FALSE))
+
+
+# 4. Asegurar que todas las muestras estén
+all_samples <- colnames(heatmap_matrix_wes)
+mutation_types_by_patient <- mutation_types_by_patient %>%
+  complete(Sample_clean = all_samples, fill = list(Writer = FALSE, Reader = FALSE, Eraser = FALSE)) %>%
+  column_to_rownames("Sample_clean")
+
+
+mutation_types_by_patient[is.na(mutation_types_by_patient)] <- FALSE
+
+# 5. Anotaciones clínicas
+annotation_data_wes <- merged_rna_clinical %>%
+  mutate(Sample_clean = gsub("RNA_FFPE_", "", Sample)) %>%
+  filter(Tumor_Sample_Barcode %in% wes_patients) %>%
+  dplyr::select(Sample_clean, response_TAC1, sex, smoking_status, stage) %>%
+  distinct() %>%
+  column_to_rownames("Sample_clean")
+
+annotation_data_wes <- annotation_data_wes %>%
+  mutate(smoking_status = as.character(smoking_status)) %>%
+  mutate(smoking_status = ifelse(is.na(smoking_status) | smoking_status == "", "Unknown", smoking_status)) %>%
+  mutate(smoking_status = factor(smoking_status, levels = c("smoker", "former_smoker", "never_smoker", "Unknown")))
+
+annotation_data_wes <- annotation_data_wes %>%
+  mutate(stage = ifelse(stage == "" | is.na(stage), "Unknown", stage)) 
+
+
+# Añadir columna: ¿tiene mutación patogénica?
+patients_with_pathogenic <- unique(pathogenic$Tumor_Sample_Barcode)
+annotation_data_wes$pathogenic_mutation <- ifelse(rownames(annotation_data_wes) %in% patients_with_pathogenic, "Yes", "No")
+
+# Reordenar para que coincida con el heatmap
+annotation_data_wes <- annotation_data_wes[all_samples, ]
+
+# Anotaciones tipo de mutación como `anno_simple`
+mutation_annotations <- HeatmapAnnotation(
+  writer = anno_simple(as.numeric(mutation_types_by_patient$Writer), col = c("0" = "white", "1" = "black")),
+  reader = anno_simple(as.numeric(mutation_types_by_patient$Reader), col = c("0" = "white", "1" = "black")),
+  eraser = anno_simple(as.numeric(mutation_types_by_patient$Eraser), col = c("0" = "white", "1" = "black")),
+  which = "column",
+  annotation_name_side = "right",
+  annotation_legend_param = list(
+    writer = list(title = "Writer", at = c("No", "Yes")),
+    reader = list(title = "Reader", at = c("No", "Yes")),
+    eraser = list(title = "Eraser", at = c("No", "Yes")),
+    title_gp = gpar(fontsize = 10),
+    labels_gp = gpar(fontsize = 8)
+  )
+)
+
+# 🔹 Anotaciones clínicas como `df`
+clinical_annotations <- HeatmapAnnotation(
+  df = annotation_data_wes,
+  col = list(
+    response_TAC1 = c("responder" = "green", "non_responder" = "red", "Unknown" = "grey80"),
+    sex = c("male" = "orchid1", "female" = "skyblue"),
+    smoking_status = c("smoker" = "red", "former_smoker" = "orange", "never_smoker" = "blue", "Unknown" = "lightgrey"),
+    pathogenic_mutation = c("Yes" = "black", "No" = "white"),
+    stage = c("I" = "lightgreen", "II" = "skyblue", "III" = "orange", "IV" = "indianred1", "Unknown" = "lightgrey")
+  ),
+  which = "column",
+  annotation_legend_param = list(title_gp = gpar(fontsize = 10), labels_gp = gpar(fontsize = 8))
+)
+
+# 🔹 Combinar ambas anotaciones
+top_annotation_wes <- c(clinical_annotations, mutation_annotations)
+
+# HEATMAP
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Firm_genetype_wes.png", width = 4000, height = 3000, res = 300)
+
+Heatmap(
+  matrix = heatmap_matrix_wes,
+  name = "GSVA score",
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+  top_annotation = top_annotation_wes,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 10),
+  column_names_gp = gpar(fontsize = 8),
+  clustering_distance_rows = "euclidean",  
+  clustering_method_rows = "ward.D",
+  column_title = "Epitranscriptomic Signatures (GSVA)",
+  column_title_gp = gpar(fontsize = 14, fontface = "bold")
+)
+dev.off()
+```
 
 
 # Objective 2: To evaluate whether there is a dysregulation of the m6A machinery that could serve as a biomarker of response to immunotherapy in RCC patients.
@@ -1436,46 +1613,1392 @@ write.table(pjustNonResp_strict,
 
 ### 2.1. Differential expression analysis between responder and non-responder patients 
 
+Cargar datos de RNA en chunk 18 y descargar clinical data.
+3
+
 ```{r}
+# ---------------------------------------------
+# 1. Load count matrix and metadata
+# ---------------------------------------------
+rna_expression_all <- rna_expression_all %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", Sample),
+         Sample = gsub("\\.tsv$", "", Sample))        
 
-# COMPARISON RESP VS NONRESP
-pmultipleResp <- presp_variants[presp_variants$n > 1,]
-pmultipleNonResp <- pnonResp_variants[pnonResp_variants$n > 1,]
+count_matrix <- rna_expression_all %>%
+  dplyr::select(Gene, Sample, Expression) %>%
+  group_by(Gene, Sample) %>%
+  summarise(Expression = sum(Expression), .groups = "drop") %>%  # Handles duplicates if any
+  pivot_wider(names_from = Sample, values_from = Expression) %>%
+  column_to_rownames("Gene")  # Gene names as rownames
+
+count_matrix <- as.matrix(count_matrix)
 
 
-pvarjustResp_strict <- pmultipleResp[!(pmultipleResp$variantID_noSample %in% pnonResp_variants$variantID_noSample),]
-write.table(pvarjustResp_strict, 'Results/potentiallyPathogenic/strictlyExclusivelyMutatedVariants_responders.tsv', sep='\t', quote=F, col.names=T, row.names=F)
+# Filter metadata for WES patients and known response status
+metadata <- clinical_data %>%
+  filter(response_TAC1 %in% c("responder", "non_responder")) %>%
+  distinct(sample_ID, response_TAC1) %>%
+  column_to_rownames("sample_ID")
+
+# Match samples in both datasets
+common_samples <- intersect(colnames(count_matrix), rownames(metadata))
+count_matrix_filtered <- count_matrix[, common_samples]
+metadata <- metadata[common_samples, , drop = FALSE]
+
+# ---------------------------------------------
+# 2. Create DESeq2 object
+# ---------------------------------------------
+dds <- DESeqDataSetFromMatrix(countData = count_matrix_filtered,
+                              colData = metadata,
+                              design = ~ response_TAC1)
 
 
-pvarjustNonResp_strict <- pmultipleNonResp[!(pmultipleNonResp$variantID_noSample %in% presp_variants$variantID_noSample),]
-write.table(pvarjustNonResp_strict, 'Results/potentiallyPathogenic/strictlyExclusivelyMutatedVariants_nonResponders.tsv', sep='\t', quote=F, col.names=T, row.names=F)
+# ---------------------------------------------
+# 3. Run DESeq2
+# ---------------------------------------------
+dds <- DESeq(dds)
+
+# ---------------------------------------------
+# 4. Extract results
+# ---------------------------------------------
+res <- results(dds, contrast = c("response_TAC1", "responder", "non_responder"))
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("Gene") %>%
+  arrange(padj)
+
+# ---------------------------------------------
+# 5. Filter m6A genes only
+# ---------------------------------------------
+epitranscriptomic_genes <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/epitranscriptomic_regulators_annotated.txt", 
+                                 sep = "\t", header = TRUE)
+
+m6A_genes <- epitranscriptomic_genes %>%
+  filter(Mark == "m6A") %>%
+  pull(Gene_symbol)
+
+m6a_gene_list <- unique(m6A_genes)
+
+res_m6a <- res_df %>%
+  filter(Gene %in% m6a_gene_list)
+
+# ---------------------------------------------
+# 6. Save results
+# ---------------------------------------------
+write.table(res_m6a,
+            file = "Results/DEG_m6A_responder_vs_nonresponder.tsv",
+            sep = "\t", quote = FALSE, row.names = FALSE)
 
 ```
 
+```{r}
+# ---------------------------------------------
+# 7. Boxplot of most significant gene
+# ---------------------------------------------
+
+# Extraer el top 1 gen más significativo
+top_gene <- res_m6a %>% filter(!is.na(padj)) %>% dplyr::slice(1) %>% pull(Gene)
+
+# Obtener expresión normalizada (transformación rlog para visualización más clara)
+rld <- rlog(dds, blind = TRUE)
+rlog_mat <- assay(rld)
+
+# Crear dataframe para ggplot
+plot_data <- data.frame(
+  Expression = rlog_mat[top_gene, common_samples],
+  Sample = common_samples,
+  response_TAC1 = metadata$`response_TAC1`
+)
+
+# Añadir el p-valor ajustado
+padj_val <- signif(res_m6a$padj[res_m6a$Gene == top_gene], 3)
+
+# Graficar
+ggplot(plot_data, aes(x = response_TAC1, y = Expression, fill = response_TAC1)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.1, size = 1.5) +
+  labs(title = paste0("Top DE m6A Gene: ", top_gene),
+       subtitle = paste0("Adjusted p-value: ", padj_val),
+       x = "Response Group",
+       y = "Normalized Expression (rlog)") +
+  scale_fill_manual(values = c("responder" = "skyblue", "non_responder" = "indianred1")) +
+  theme_minimal(base_size = 14)
+
+```
+
+
+
+```{r}
+# Obtener expresión normalizada con rlog
+rld <- rlog(dds, blind = TRUE)
+rlog_mat <- assay(rld)
+
+# Loop para generar los boxplots
+for (gene in res_m6a$Gene) {
+  
+  # Verifica que el gen existe en rlog_mat
+  if (!(gene %in% rownames(rlog_mat))) next
+  
+  # Crear dataframe para graficar
+  plot_data <- data.frame(
+    Expression = rlog_mat[gene, common_samples],
+    Sample = common_samples,
+    response_TAC1 = metadata$`response_TAC1`
+  )
+  
+  # Obtener p-valor ajustado
+  padj_val <- signif(res_m6a$padj[res_m6a$Gene == gene], 3)
+  
+  # Crear y mostrar el boxplot
+  print(
+    ggplot(plot_data, aes(x = response_TAC1, y = Expression, fill = response_TAC1)) +
+      geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+      geom_jitter(width = 0.1, size = 1.5) +
+      labs(title = paste0(gene),
+           subtitle = paste0("Adjusted p-value: ", padj_val),
+           x = "Response Group",
+           y = "Normalized Expression (rlog)") +
+      scale_fill_manual(values = c("responder" = "skyblue", "non_responder" = "indianred1")) +
+      theme_minimal(base_size = 14)
+  )
+}
+```
+
+
+```{r}
+library(patchwork)
+
+plots <- list()
+
+for (gene in res_m6a$Gene) {
+  
+  if (!(gene %in% rownames(rlog_mat))) next
+  
+  plot_data <- data.frame(
+    Expression = rlog_mat[gene, common_samples],
+    Sample = common_samples,
+    response_TAC1 = metadata$`response_TAC1`
+  )
+  
+  padj_val <- signif(res_m6a$pvalue[res_m6a$Gene == gene], 3)
+  
+  p <- ggplot(plot_data, aes(x = response_TAC1, y = Expression, fill = response_TAC1)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(width = 0.1, size = 1.5) +
+    labs(title = paste0(gene),
+         subtitle = paste0("Adjusted p-value: ", padj_val),
+         x = "Response Group",
+         y = "Normalized Expression (rlog)") +
+    scale_fill_manual(values = c("responder" = "skyblue", "non_responder" = "indianred1")) +
+    theme_minimal(base_size = 10)
+  
+  plots[[gene]] <- p
+}
+
+# Combinar y guardar (8 columnas, ajustable)
+combined_plot <- wrap_plots(plots, ncol = 4)
+
+ggsave("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/all_boxplots_combined.png", combined_plot, width = 20, height = 24, dpi = 300)
+
+```
 
 ### 2.2. Gene set enrichment analysis to identify epitranscriptomic-related pathways associated to immunotherapy response
 
-```{r}
-# Enriquecimiento para respondedores
-penrichr_resp <- enrichr(pjustResp_strict$Hugo_Symbol, 
-                         c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational',
-                           'BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 
-                           'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 
-                           'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+Usamos el csv obtenido por DESeq2
 
-# Enriquecimiento para no respondedores
-penrichr_nonresp <- enrichr(pjustNonResp_strict$Hugo_Symbol, 
-                            c('MSigDB_Hallmark_2020','MSigDB_Oncogenic_Signatures','MSigDB_Computational',
-                              'BioPlanet_2019', 'KEGG_2019_Human', 'WikiPathways_2019_Human', 
-                              'TRANSFAC_and_JASPAR_PWMs', 'ChEA_2016', 
-                              'GO_Molecular_Function_2018', 'GO_Biological_Process_2018'))
+```{r}
+# 1. Leer los resultados de DESeq2 desde el archivo TSV
+res <- read_tsv("Results/DEG_m6A_responder_vs_nonresponder.tsv")
+# Convertir de SYMBOL a ENTREZID
+gene_df <- bitr(res$Gene, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+# Combinar la tabla original con los ENTREZID
+res_annot <- merge(res, gene_df, by.x = "Gene", by.y = "SYMBOL")
+
+# 2. Preparar la lista de genes ordenada por log2FoldChange
+# Crear el vector nombrado
+gene_list <- res_annot$log2FoldChange
+names(gene_list) <- res_annot$ENTREZID
+
+# Eliminar NAs y ordenar de mayor a menor
+gene_list <- gene_list[!is.na(gene_list)]
+gene_list <- sort(gene_list, decreasing = TRUE)
+
+# 3. Realizar GSEA con Reactome pathways
+gsea_result <- gseReactome(geneList = gene_list, 
+                           organism = "human")      # Número máximo de genes p
+
+
+# 4. Visualizar los resultados con un dotplot
+dotplot(gsea_result)
+
+# 5. Otras visualizaciones, como enrichMap
+enrichMap(gsea_result)
+
 ```
+El paquete anterior no funciona porque tengo muy pocos genes. vamos a probar con Enrich
+
+```{r}
+# Definir la lista de genes de la maquinaria m6A (asegúrate de que sean símbolos de genes)
+# Lista de genes m6A: m6a_genes$Gene_symbol
+epitranscriptomic_genes <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/epitranscriptomic_regulators_annotated.txt", 
+                                 sep = "\t", header = TRUE)
+genes_m6A <- epitranscriptomic_genes %>%
+  filter(Mark == "m6A") %>%
+  pull(Gene_symbol)
+
+
+# Realizar el análisis de enriquecimiento en varias bases de datos
+enriched <- enrichr(genes_m6A, databases = c("GO_Biological_Process_2021", "KEGG_2021_Human", "Reactome_2022"))
+
+
+# Guardar los resultados en archivos CSV
+write.csv(enriched[["GO_Biological_Process_2021"]], "enriched_GO_Biological_Process.csv", row.names = FALSE)
+write.csv(enriched[["KEGG_2021_Human"]], "enriched_KEGG_2021_Human.csv", row.names = FALSE)
+write.csv(enriched[["Reactome_2022"]], "enriched_Reactome_2022.csv", row.names = FALSE)
+
+
+# Ver los resultados de los diferentes enriquecimientos
+
+```
+```{r}
+# Filtrar los términos de GO Biological Process para que solo se muestren los más significativos
+# Por ejemplo, seleccionamos los términos con p-value < 0.05 o -log10(P-value) > 1.3 (~ p-value < 0.05)
+
+filtered_GO <- enriched[["GO_Biological_Process_2021"]] %>%
+  filter(P.value < 0.05)  # Puedes ajustar el umbral aquí
+
+# Seleccionar un número limitado de los mejores términos
+# Por ejemplo, seleccionamos los 20 términos más significativos
+top_GO <- filtered_GO %>%
+  arrange(P.value) %>%
+  head(20)  # Ajusta el número de términos aquí según lo que necesites
+
+# Visualización para GO Biological Process (Barplot) con ggplot2
+p1 <- ggplot(top_GO, aes(x = -log10(P.value), y = Term, fill = -log10(P.value))) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Enrichment in GO Biological Process", x = "Enrichment Score (-log10(P-value))", y = "GO Term") +
+  theme(axis.text.y = element_text(size = 6))
+
+# Definir la ruta para guardar los gráficos
+save_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Enrichment/"
+
+# Guardar el gráfico de GO Biological Process como un archivo PNG
+ggsave(paste0(save_path, "Filtered_GO_Biological_Process_Enrichment.png"), plot = p1, width = 10, height = 6, dpi = 300)
+
+# O guardar el gráfico como un archivo PDF
+ggsave(paste0(save_path, "Filtered_GO_Biological_Process_Enrichment.pdf"), plot = p1, width = 10, height = 6)
+
+# 2. Visualización para KEGG Pathways (Dotplot con ggplot2)
+p2 <- ggplot(enriched[["KEGG_2021_Human"]], aes(x = -log10(P.value), y = Term, size = -log10(P.value), color = -log10(P.value))) +
+  geom_point() +
+  scale_color_viridis_c() +
+  theme_minimal() +
+  labs(title = "Enrichment in KEGG Pathways", x = "P-value (-log10)", y = "KEGG Pathway") +
+  theme(axis.text.y = element_text(size = 6))
+
+# Guardar el gráfico de KEGG Pathways como un archivo PNG
+ggsave(paste0(save_path, "KEGG_Enrichment.png"), plot = p2, width = 10, height = 6, dpi = 300)
+
+# O guardar el gráfico como un archivo PDF
+ggsave(paste0(save_path, "KEGG_Enrichment.pdf"), plot = p2, width = 10, height = 6)
+
+# 3. Visualización para Reactome (Dotplot con ggplot2)
+p3 <- ggplot(enriched[["Reactome_2022"]], aes(x = -log10(P.value), y = Term, size = -log10(P.value), color = -log10(P.value))) +
+  geom_point() +
+  scale_color_viridis_c() +
+  theme_minimal() +
+  labs(title = "Enrichment in Reactome Pathways", x = "P-value (-log10)", y = "Reactome Pathway") +
+  theme(axis.text.y = element_text(size = 6))
+
+# Guardar el gráfico de Reactome Pathways como un archivo PNG
+ggsave(paste0(save_path, "Reactome_Enrichment.png"), plot = p3, width = 10, height = 6, dpi = 300)
+
+# O guardar el gráfico como un archivo PDF
+ggsave(paste0(save_path, "Reactome_Enrichment.pdf"), plot = p3, width = 10, height = 6)
+
+
+```
+
 
 
 ### 2.3. Compare gene expression profiles of the m6A machinery between responders and non-responders 
 
 	
+## 3. To construct machine learning models and Kaplan-Meier estimators, based on the mutational and expression profiles, to predict immunotherapy response and survival
 
+### 3.1. Kaplan-Meier and Cox Hazards ratio analysis to assess the effect of m6A machinery mutational status and expression levels on patient survival 
+
+Primero se ha representado KM sobre pacientes NR y  R calculando su OS. Para ello se ha utilizado la fecha de last contact o la fecha de exitus como fecha fin y la fecha de inicio de ICI par la start. El momento clave (0, 1) es si hay muerte o no.
+
+```{r}
+# Datos clínicos con columnas: sample_ID, OS_time, OS_status
+# Import Clinical Data & Remove Last 9 Rows
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized.txt"
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+
+# Expresión rlog de DESeq2: código 2.1 de expresión diferencial
+
+# Lista de genes m6A: m6a_genes$Gene_symbol
+epitranscriptomic_genes <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/epitranscriptomic_regulators_annotated.txt", 
+                                 sep = "\t", header = TRUE)
+m6a_genes <- epitranscriptomic_genes %>%
+  filter(Mark == "m6A") %>%
+  pull(Gene_symbol)
+
+
+# Modificar el bloque para crear 'os_end_time' y calcular 'OS_time_months'
+# Crear la columna 'new_date_existus' basada en 'date_existus'
+clinical_data$new_date_existus <- clinical_data$date_exitus
+
+# Bucle para recorrer cada fila y sustituir valores vacíos en 'new_date_existus'
+for (i in 1:nrow(clinical_data)) {
+  if (clinical_data$new_date_existus[i] == "") {
+    clinical_data$new_date_existus[i] <- clinical_data$date_last_contact[i]
+  }
+}
+
+# Convertir las columnas 'date_existus', 'date_last_contact', y 'ICI_start' a formato Date
+clinical_data$new_date_existus <- as.Date(clinical_data$new_date_existus, format="%d/%m/%Y")
+clinical_data$ICI_start <- as.Date(clinical_data$ICI_start, format="%d/%m/%Y")
+
+# Crear la columna 'ostime_month' con la diferencia en años entre 'ICI_start' y 'date_existus'
+# Primero, calculamos la diferencia en meses y luego la convertimos a años
+clinical_data$OS_time_months <- as.numeric(difftime(clinical_data$new_date_existus, clinical_data$ICI_start, units = "days")) / 365.25
+
+clinical_data$OS_status <- clinical_data$exitus
+
+
+# Limpiar nombres de muestra y filtrar por datos disponibles de supervivencia
+surv_data <- clinical_data %>%
+  filter(!is.na(OS_time_months) & !is.na(OS_status)) %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+         Sample = gsub("\\.tsv$", "", Sample)) %>%
+  distinct(Sample, OS_time_months, OS_status)
+
+# Intersección entre expresión y datos clínicos
+common_samples_surv <- intersect(colnames(rlog_mat), surv_data$Sample)
+rlog_sub <- rlog_mat[, common_samples_surv]
+surv_data <- surv_data %>% filter(Sample %in% common_samples_surv)
+
+# Filtrar datos para responder/non responder
+surv_response_data <- clinical_data %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+         Sample = gsub("\\.tsv$", "", Sample)) %>%
+  filter(response_TAC1 %in% c("responder", "non_responder"),
+         !is.na(OS_time_months), !is.na(OS_status)) %>%
+  distinct(Sample, response_TAC1, OS_time_months, OS_status)
+
+# Objeto de supervivencia
+surv_obj <- Surv(time = surv_response_data$OS_time_months, event = surv_response_data$OS_status)
+
+# Ajustar modelo Kaplan-Meier
+fit_km_response <- survfit(surv_obj ~ response_TAC1, data = surv_response_data)
+
+# Graficar KM con eje de tiempo en meses
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_OS.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_response,
+  data = surv_response_data,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+    pval.size = 3,
+  legend.title = "Response",
+  legend.labs = c("Non Responder", "Responder"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+    risk.table.height = 0.3,  # Ajustar la altura de la tabla de riesgo (valor entre 0 y 1)
+  risk.table.fontsize = 3,  # Reducir el tamaño de la fuente en la tabla
+  risk.table.y.text.col = TRUE,  # Colorear las filas de la tabla de riesgo
+  risk.table.y.text.size = 2,  # Tamaño de texto de las etiquetas en la tabla
+  xlab = "Time (Years)",  # Cambiar etiqueta del eje X a meses
+  break.time.by = 1  # Ajustar la frecuencia de los ticks en el eje X
+)
+dev.off()
+
+```
+
+Ahora separamos segun si tienen mutaciones en el m6A con efecto en proteina o no:
+
+Para ello cargamos un documento creado con estos datos
+
+```{r}
+surv_response_data_pe <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM.txt", header = TRUE, sep = "\t")
+surv_response_data_pe <- surv_response_data_pe %>% filter(Mutational_Status != "unknown")
+# Convertir y manejar los valores no numéricos
+
+# Reemplazar las comas por puntos en la columna OS_time_months
+surv_response_data_pe$OS_time_months <- gsub(",", ".", surv_response_data_pe$OS_time_months)
+
+# Convertir la columna a numérica (después de reemplazar las comas)
+surv_response_data_pe$OS_time_months <- as.numeric(surv_response_data_pe$OS_time_months)
+
+# Filtrar los datos con Mutational_Status diferente de "Unknown" (repetido)
+surv_response_data_pe <- surv_response_data_pe %>% filter(Mutational_Status != "Unknown")
+
+# Intersección entre expresión y datos clínicos
+common_samples_surv <- intersect(colnames(rlog_mat), surv_data$Sample)
+rlog_sub <- rlog_mat[, common_samples_surv]
+surv_data <- surv_data %>% filter(Sample %in% common_samples_surv)
+
+# Objeto de supervivencia
+surv_obj <- Surv(time = surv_response_data_pe$OS_time_months, event = surv_response_data_pe$OS_status)
+
+# Ajustar modelo Kaplan-Meier
+fit_km_response <- survfit(surv_obj ~ Mutational_Status, data = surv_response_data_pe)
+
+# Graficar KM con eje de tiempo en meses
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_OS_MS.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_response,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Mutational Status",
+  legend.labs = c("Protein Effect", "Non Protein Effect"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,  
+  risk.table.fontsize = 3, 
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,  
+  xlab = "Time (Years)",  
+  break.time.by = 1  
+)
+dev.off()
+
+```
+Ahora distinguimos en reader writter y eraser 
+
+```{r}
+# Leer el archivo
+surv_response_data_pe <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM.txt", header = TRUE, sep = "\t")
+
+# Filtrar los datos con Mutational_Status diferente de "unknown"
+surv_response_data_pe <- surv_response_data_pe %>% filter(Mutational_Status != "unknown")
+
+# Reemplazar las comas por puntos en la columna OS_time_months
+surv_response_data_pe$OS_time_months <- gsub(",", ".", surv_response_data_pe$OS_time_months)
+
+# Convertir la columna a numérica (después de reemplazar las comas)
+surv_response_data_pe$OS_time_months <- as.numeric(surv_response_data_pe$OS_time_months)
+
+# Filtrar los datos con Mutational_Status diferente de "Unknown" (repetido)
+surv_response_data_pe <- surv_response_data_pe %>% filter(Mutational_Status != "Unknown")
+
+# Convertir las columnas eraser, writer, reader a variables binarias (0 y 1)
+surv_response_data_pe <- surv_response_data_pe %>%
+  mutate(
+    eraser = ifelse(Eraser == "Eraser", 1, 0),
+    writer = ifelse(Writter == "Writter", 1, 0),
+    reader = ifelse(Reader == "Reader", 1, 0)
+  )
+
+# Intersección entre expresión y datos clínicos
+common_samples_surv <- intersect(colnames(rlog_mat), surv_data$Sample)
+rlog_sub <- rlog_mat[, common_samples_surv]
+surv_data <- surv_data %>% filter(Sample %in% common_samples_surv)
+
+# Graficar para cada grupo (eraser, writer, reader)
+
+# 1. Para eraser (Mutación de tipo eraser)
+surv_obj_eraser <- Surv(time = surv_response_data_pe$OS_time_months, event = surv_response_data_pe$OS_status)
+fit_km_eraser <- survfit(surv_obj_eraser ~ eraser, data = surv_response_data_pe)
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_OS_Eraser.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_eraser,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Eraser Mutation",
+  legend.labs = c("No Eraser", "Eraser"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,
+  risk.table.fontsize = 3,
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,
+  xlab = "Time (Years)",
+  break.time.by = 1
+)
+dev.off()
+
+# 2. Para writer (Mutación de tipo writer)
+surv_obj_writer <- Surv(time = surv_response_data_pe$OS_time_months, event = surv_response_data_pe$OS_status)
+fit_km_writer <- survfit(surv_obj_writer ~ writer, data = surv_response_data_pe)
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_OS_Writer.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_writer,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Writer Mutation",
+  legend.labs = c("No Writer", "Writer"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,
+  risk.table.fontsize = 3,
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,
+  xlab = "Time (Years)",
+  break.time.by = 1
+)
+dev.off()
+
+# 3. Para reader (Mutación de tipo reader)
+surv_obj_reader <- Surv(time = surv_response_data_pe$OS_time_months, event = surv_response_data_pe$OS_status)
+fit_km_reader <- survfit(surv_obj_reader ~ reader, data = surv_response_data_pe)
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_OS_Reader.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_reader,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Reader Mutation",
+  legend.labs = c("No Reader", "Reader"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,
+  risk.table.fontsize = 3,
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,
+  xlab = "Time (Years)",
+  break.time.by = 1
+)
+dev.off()
+```
+Repetimos pero con PFS
+
+A continuación se ha representado KM sobre pacientes NR y  R calculando su PFS. Para ello se ha utilizado la fecha de last contact o la fecha de exitus como fecha fin y la fecha de inicio de ICI par la start. El momento clave (0, 1) es si hay muerte o no.
+
+```{r}
+# Cargar los datos clínicos (en formato Excel)
+
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized_2.xlsx"
+clinical_data <- read_excel(clinical_data_path)
+
+# Crear la columna 'new_date_existus' basada en 'date_last_contact' o 'ICI_end' dependiendo de 'ICI_progression'
+clinical_data <- clinical_data %>%
+  mutate(new_date_existus = if_else(ICI_progression == 1, ICI_end, date_last_contact))
+
+# Crear la columna 'PFS_time_months' (diferencia en meses entre ICI_start y new_date_existus)
+clinical_data$PFS_time_months <- as.numeric(difftime(clinical_data$new_date_existus, clinical_data$ICI_start, units = "days")) / 365.25
+
+# Establecer el estado de progresión: 1 si progresión, 0 si no progresión
+clinical_data$PFS_status <- clinical_data$ICI_progression
+
+# Filtrar las muestras que tienen datos completos de PFS
+surv_data_pfs <- clinical_data %>%
+  filter(!is.na(PFS_time_months) & !is.na(PFS_status)) %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+         Sample = gsub("\\.tsv$", "", Sample)) %>%
+  distinct(Sample, PFS_time_months, PFS_status)
+
+surv_data_pfs$response_TAC1 <- clinical_data$response_TAC1
+# Intersección entre expresión y datos clínicos (como antes, rlog_mat debe estar disponible)
+#common_samples_surv_pfs <- intersect(colnames(rlog_mat), surv_data_pfs$Sample)
+#rlog_sub_pfs <- rlog_mat[, common_samples_surv_pfs]
+#surv_data_pfs <- surv_data_pfs %>% filter(Sample %in% common_samples_surv_pfs)
+
+# Objeto de supervivencia para PFS
+surv_obj_pfs <- Surv(time = surv_data_pfs$PFS_time_months, event = surv_data_pfs$PFS_status)
+
+# Ajustar modelo Kaplan-Meier para PFS
+fit_km_response_pfs <- survfit(surv_obj_pfs ~ response_TAC1, data = surv_data_pfs)
+
+# Graficar Kaplan-Meier para PFS con eje de tiempo en meses
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_PFS.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_response_pfs,
+  data = surv_data_pfs,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Response",
+  legend.labs = c("Non Responder", "Responder"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,  # Ajustar la altura de la tabla de riesgo (valor entre 0 y 1)
+  risk.table.fontsize = 3,  # Reducir el tamaño de la fuente en la tabla
+  risk.table.y.text.col = TRUE,  # Colorear las filas de la tabla de riesgo
+  risk.table.y.text.size = 2,  # Tamaño de texto de las etiquetas en la tabla
+  xlab = "Time (Years)",  # Cambiar etiqueta del eje X a meses
+  break.time.by = 1  # Ajustar la frecuencia de los ticks en el eje X
+)
+dev.off()
+
+
+```
+```{r}
+# Leer el archivo de PFS
+surv_response_data_pe <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM_PFS.txt", header = TRUE, sep = "\t")
+
+# Filtrar los datos con Mutational_Status conocido
+surv_response_data_pe <- surv_response_data_pe %>% filter(Mutational_Status != "unknown" & Mutational_Status != "Unknown")
+
+# Reemplazar comas por puntos y convertir a numérico
+surv_response_data_pe$PFS_time_months <- gsub(",", ".", surv_response_data_pe$PFS_time_months)
+surv_response_data_pe$PFS_time_months <- as.numeric(surv_response_data_pe$PFS_time_months)
+
+# Filtrar los datos con Mutational_Status diferente de "Unknown" (repetido)
+surv_response_data_pe <- surv_response_data_pe %>% filter(Mutational_Status != "Unknown")
+
+# Objeto de supervivencia
+surv_obj <- Surv(time = surv_response_data_pe$PFS_time_months, event = surv_response_data_pe$PFS_status)
+
+# Ajustar modelo Kaplan-Meier
+fit_km_response <- survfit(surv_obj ~ Mutational_Status, data = surv_response_data_pe)
+
+# Graficar KM con eje de tiempo en meses
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_PFS_MS.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_response,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Mutational Status",
+  legend.labs = c("Protein Effect", "Non Protein Effect"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,  
+  risk.table.fontsize = 3, 
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,  
+  xlab = "Time (Years)",  
+  break.time.by = 1  
+)
+dev.off()
+```
+
+
+
+
+```{r}
+
+
+# Leer el archivo de PFS
+surv_response_data_pe <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM_PFS.txt", header = TRUE, sep = "\t")
+
+# Filtrar los datos con Mutational_Status conocido
+surv_response_data_pe <- surv_response_data_pe %>% filter(Mutational_Status != "unknown" & Mutational_Status != "Unknown")
+
+# Reemplazar comas por puntos y convertir a numérico
+surv_response_data_pe$PFS_time_months <- gsub(",", ".", surv_response_data_pe$PFS_time_months)
+surv_response_data_pe$PFS_time_months <- as.numeric(surv_response_data_pe$PFS_time_months)
+
+# Convertir columnas a binarias
+surv_response_data_pe <- surv_response_data_pe %>%
+  mutate(
+    eraser = ifelse(Eraser == "Eraser", 1, 0),
+    writer = ifelse(Writter == "Writter", 1, 0),
+    reader = ifelse(Reader == "Reader", 1, 0)
+  )
+
+# Crear objeto de supervivencia
+surv_obj <- Surv(time = surv_response_data_pe$PFS_time_months, event = surv_response_data_pe$PFS_status)
+
+# -----------------------------
+# Gráfico 1: Eraser
+fit_km_eraser <- survfit(surv_obj ~ eraser, data = surv_response_data_pe)
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_PFS_Eraser.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_eraser,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Eraser Mutation",
+  legend.labs = c("No Eraser", "Eraser"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,
+  risk.table.fontsize = 3,
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,
+  xlab = "Time (Years)",
+  break.time.by = 1
+)
+dev.off()
+
+# -----------------------------
+# Gráfico 2: Writer
+fit_km_writer <- survfit(surv_obj ~ writer, data = surv_response_data_pe)
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_PFS_Writer.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_writer,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Writer Mutation",
+  legend.labs = c("No Writer", "Writer"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,
+  risk.table.fontsize = 3,
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,
+  xlab = "Time (Years)",
+  break.time.by = 1
+)
+dev.off()
+
+# -----------------------------
+# Gráfico 3: Reader
+fit_km_reader <- survfit(surv_obj ~ reader, data = surv_response_data_pe)
+
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/KM_PFS_Reader.png", width = 1000, height = 1000, res = 300)
+ggsurvplot(
+  fit_km_reader,
+  data = surv_response_data_pe,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = FALSE,
+  pval.size = 3,
+  legend.title = "Reader Mutation",
+  legend.labs = c("No Reader", "Reader"),
+  palette = c("indianred1", "skyblue"),
+  ggtheme = theme_minimal(base_size = 10),
+  risk.table.height = 0.3,
+  risk.table.fontsize = 3,
+  risk.table.y.text.col = TRUE,
+  risk.table.y.text.size = 2,
+  xlab = "Time (Years)",
+  break.time.by = 1
+)
+dev.off()
+
+
+```
+
+
+Cox-Hazard 
+
+Análisis de Cox Hazard para supervivencia global (OS) según tipo de mutación
+ 
+```{r}
+# 1. Leer datos
+surv_response_data_pe <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM.txt", header = TRUE, sep = "\t")
+surv_response_data_pfs <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM_PFS.txt", header = TRUE, sep = "\t")
+
+# 2. Añadir Response_TAC1 y otras columnas
+clinical_subset <- clinical_data %>% dplyr::select(sample_ID, response_TAC1)
+
+# Merge con OS
+data_pe <- merge(surv_response_data_pe, clinical_subset, by.x = "Sample", by.y = "sample_ID")
+
+# Merge con PFS
+data_pfs <- merge(surv_response_data_pfs, clinical_subset, by.x = "Sample", by.y = "sample_ID")
+
+# 3. Eliminar Unknown
+data_pe <- filter(data_pe, Mutational_Status != "Unknown")
+data_pfs <- filter(data_pfs, Mutational_Status != "Unknown")
+
+# Reemplazar comas por puntos y convertir a numérico
+data_pe$OS_time_months <- as.numeric(gsub(",", ".", data_pe$OS_time_months))
+data_pe$OS_status <- as.numeric(as.character(data_pe$OS_status))
+data_pfs$PFS_time_months <- as.numeric(gsub(",", ".", data_pfs$PFS_time_months))
+data_pfs$PFS_status <- as.numeric(as.character(data_pfs$PFS_status))
+
+# 4. Modelo COX con todas las variables
+cox_pe <- coxph(Surv(OS_time_months, OS_status) ~ Eraser + Writter + Reader + response_TAC1 + Mutational_Status, data = data_pe) # Meter clinicas 
+
+
+cox_pfs <- coxph(Surv(PFS_time_months, PFS_status) ~ Eraser + Writter + Reader + response_TAC1 + Mutational_Status, data = data_pfs)
+
+# 5. Extraer los resultados del modelo COX
+results_pe <- tidy(cox_pe, exponentiate = TRUE, conf.int = TRUE)
+results_pfs <- tidy(cox_pfs, exponentiate = TRUE, conf.int = TRUE)
+
+# Redondear a 3 decimales
+results_pe <- results_pe %>%
+  mutate(across(c(estimate, conf.low, conf.high, p.value), round, 3))
+
+results_pfs <- results_pfs %>%
+  mutate(across(c(estimate, conf.low, conf.high, p.value), round, 3))
+
+# 6. Preparar las etiquetas para ambos gráficos (OS y PFS)
+results_pe$label <- paste0(results_pe$term, 
+                           "\nHR=", results_pe$estimate, 
+                           " [", results_pe$conf.low, "-", results_pe$conf.high, "]", 
+                           "\nP=", results_pe$p.value)
+
+results_pfs$label <- paste0(results_pfs$term, 
+                            "\nHR=", results_pfs$estimate, 
+                            " [", results_pfs$conf.low, "-", results_pfs$conf.high, "]", 
+                            "\nP=", results_pfs$p.value)
+
+# 7. Crear el gráfico de Forest plot para OS (Overall Survival)
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Forest_Plot_OS.png", width = 800, height = 600)
+
+# Usar ggforest de survminer
+
+ggplot(results_pe, aes(y = reorder(term, estimate), x = estimate)) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), color = "blue") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(title = "Forest Plot - OS", x = "Hazard Ratio", y = "") +
+  theme_minimal() +
+  geom_text(aes(label = label), hjust = -0.1, size = 3.5) +
+  coord_cartesian(xlim = c(min(results_pe$conf.low) - 0.5, max(results_pe$conf.high) + 0.5)) +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text.x = element_text(size = 10)) 
+
+# Cerrar el archivo PNG
+dev.off()
+
+# 8. Crear el gráfico de Forest plot para PFS (Progression-Free Survival)
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Forest_Plot_PFS.png", width = 800, height = 600)
+
+ggplot(results_pfs, aes(y = reorder(term, estimate), x = estimate)) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), color = "blue") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(title = "Forest Plot - PFS", x = "Hazard Ratio", y = "") +
+  theme_minimal() +
+  geom_text(aes(label = label), hjust = -0.1, size = 3.5) +
+  coord_cartesian(xlim = c(min(results_pfs$conf.low) - 0.5, max(results_pfs$conf.high) + 0.5)) +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text.x = element_text(size = 10)) # Ajuste de tamaño para la visibilidad
+
+# Cerrar el archivo PNG
+dev.off()
+```
+
+
+```{r}
+# ────────────────────────────────────────────────
+# 1. Cargar datos
+# ────────────────────────────────────────────────
+
+
+# Leer datos clínicos y de supervivencia
+clinical_data <- clinical_data %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+         Sample = gsub("\\.tsv$", "", Sample))
+
+surv_response_data_pe <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM.txt",
+                                    header = TRUE, sep = "\t")
+
+surv_response_data_pe <- surv_response_data_pe %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", Sample),
+         Sample = gsub("\\.tsv$", "", Sample))
+
+# ────────────────────────────────────────────────
+# 2. Unir datos clínicos con datos de OS
+# ────────────────────────────────────────────────
+merged_os <- surv_response_data_pe %>%
+  left_join(clinical_data %>%
+              dplyr::select(Sample, sex, smoking_status, response_TAC1, age, stage),
+            by = "Sample") %>%
+  filter(!is.na(OS_time_months), !is.na(OS_status))
+
+# Reemplazar comas por puntos y convertir tiempo a numérico
+merged_os$OS_time_months <- as.numeric(gsub(",", ".", merged_os$OS_time_months))
+
+# Factorizar las variables categóricas
+merged_os <- merged_os %>%
+  mutate(
+    response_TAC1 = factor(response_TAC1, levels = c("non_responder", "responder")),
+    sex = factor(sex),
+    smoking_status = factor(smoking_status),
+    stage = factor(stage),
+    age_group = ifelse(age <= median(age, na.rm = TRUE), "young", "old"),
+    age_group = factor(age_group, levels = c("young", "old"))
+  )
+
+# ────────────────────────────────────────────────
+# 3. Modelo de Cox multivariado (OS)
+# ────────────────────────────────────────────────
+surv_obj <- Surv(time = merged_os$OS_time_months, event = merged_os$OS_status)
+
+cox_model <- coxph(surv_obj ~ response_TAC1 + sex + smoking_status + age_group + stage, data = merged_os)
+
+cox_summary <- summary(cox_model)
+
+# ────────────────────────────────────────────────
+# 4. Crear tabla para Forest Plot
+# ────────────────────────────────────────────────
+results <- data.frame(
+  Variable = rownames(cox_summary$coefficients),
+  HR = round(exp(cox_summary$coefficients[, "coef"]), 2),
+  Lower_CI = round(exp(cox_summary$coefficients[, "coef"] - 1.96 * cox_summary$coefficients[, "se(coef)"]), 2),
+  Upper_CI = round(exp(cox_summary$coefficients[, "coef"] + 1.96 * cox_summary$coefficients[, "se(coef)"]), 2),
+  p_value = signif(cox_summary$coefficients[, "Pr(>|z|)"], 3)
+)
+
+# Eliminar NA o Inf que puedan romper el plot
+results <- results %>% filter(is.finite(HR) & is.finite(Lower_CI) & is.finite(Upper_CI))
+
+# Crear etiquetas combinadas
+results <- results %>%
+  mutate(label = paste0(Variable, "\nHR: ", HR, " [", Lower_CI, "-", Upper_CI, "]"))
+
+# ────────────────────────────────────────────────
+# 5. Visualización: Forest Plot
+# ────────────────────────────────────────────────
+# Filtrar filas con valores válidos para log-scale
+results <- results %>%
+  filter(HR > 0 & Lower_CI > 0 & Upper_CI > 0 & is.finite(HR) & is.finite(Lower_CI) & is.finite(Upper_CI))
+
+# Etiquetas combinadas
+results <- results %>%
+  mutate(label = paste0(Variable, "\nHR: ", HR, " [", Lower_CI, "-", Upper_CI, "]"))
+
+# Forest plot
+png("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Fotos/Forest_Cox_OS_Clinical.png", width = 1200, height = 900, res = 300)
+forestplot(
+  labeltext = results$label,
+  mean = results$HR,
+  lower = results$Lower_CI,
+  upper = results$Upper_CI,
+  zero = 1,
+  boxsize = 0.15,
+  col = fpColors(box = "royalblue", lines = "black", zero = "gray50"),
+  xlog = TRUE,
+  xlab = "Hazard Ratio (HR)",
+  title = "Cox Model for Overall Survival (Clinical Variables)",
+  lineheight = unit(1.5, "cm")
+)
+dev.off()
+
+```
+
+
+### 3.2. Combine m6A machinery mutational status, m6A machinery expression levels and clinical variables into a machine learning classifier (LASSO, random forest) to predict immunotherapy response 
+
+
+random forests can handle extremely large datasets, where the so-called "curse of 
+dimensionality" might cause other models to fail. At the same time, its error rates for most learning tasks are on par with nearly any other method.
+
+Strengths
+ • An all-purpose model that performs 
+well on most problems
+ • Can handle noisy or missing data 
+as well as categorical or continuous 
+features
+ • Selects only the most important 
+features
+
+
+ Weaknesses
+ • Unlike a decision tree, the model is 
+not easily interpretable
+ • May require some work to tune the 
+model to the data
+ • Can be used on data with an 
+extremely large number of features 
+or examples
+
+**Preparacion de los datos**
+
+```{r}
+# ────────────────────────────────────────────────
+# 1. Combine expression, mutation, clinical data
+# ────────────────────────────────────────────────
+
+# cargamos los datos
+
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized.txt"
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+
+epitranscriptomic_genes <- fread("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/epitranscriptomic_regulators_annotated.txt", 
+                                 sep = "\t", header = TRUE)
+m6a_genes <- epitranscriptomic_genes %>%
+  filter(Mark == "m6A") %>%
+  pull(Gene_symbol)
+mutation_status <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM.txt",
+                              sep = "\t", header = TRUE)
+
+
+# Subset: responders & non-responders only
+metadata <- clinical_data %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+         Sample = gsub("\\.tsv$", "", Sample)) %>%
+  filter(response_TAC1 %in% c("responder", "non_responder")) %>%
+  dplyr::select(Sample, response_TAC1, sex, age, stage)
+
+# Normalize response variable
+metadata$response_TAC1 <- factor(metadata$response_TAC1, levels = c("non_responder", "responder"))
+
+# Prepare expression matrix: only m6A genes, only samples in metadata
+expr_df <- as.data.frame(t(rlog_mat))
+expr_df$Sample <- rownames(expr_df)
+expr_m6a <- expr_df %>%
+  dplyr::select(all_of(m6a_genes), Sample)
+
+# Prepare mutational status (binary)
+mutation_status <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Protein_effect_annotation_KM.txt", sep = "\t", header = TRUE)
+mutation_status <- mutation_status %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", Sample),
+         Sample = gsub("\\.tsv$", "", Sample)) %>%
+  filter(Mutational_Status %in% c("Protein_Effect_Mutation", "Non_Protein_Effect_Mutation")) %>%
+  mutate(Protein_Effect = ifelse(Mutational_Status == "Protein_Effect_Mutation", 1, 0)) %>%
+  dplyr::select(Sample, Protein_Effect, writer = Writter, reader = Reader, eraser = Eraser)
+
+# Convert writer/reader/eraser to binary
+mutation_status <- mutation_status %>%
+  mutate(writer = ifelse(writer == "Writter", 1, 0),
+         reader = ifelse(reader == "Reader", 1, 0),
+         eraser = ifelse(eraser == "Eraser", 1, 0))
+
+# Combine all
+merged_data <- metadata %>%
+  left_join(expr_m6a, by = "Sample") %>%
+  left_join(mutation_status, by = "Sample") %>%
+  na.omit()
+
+```
+
+```{r}
+# ─────────────────────────────────────────────────────
+# 1. Cargar librerías necesarias
+# ─────────────────────────────────────────────────────
+library(randomForest)
+library(pROC)
+library(dplyr)
+
+# ─────────────────────────────────────────────────────
+# 2. Preparar matriz de expresión media por gen m6A
+# ─────────────────────────────────────────────────────
+# Filtrar solo los genes m6A y hacer media por muestra (si quieres usar todos, omite esta parte)
+m6a_expression <- t(rlog_mat[m6a_genes[m6a_genes %in% rownames(rlog_mat)], ])
+m6a_expression_df <- as.data.frame(m6a_expression)
+m6a_expression_df$Sample <- rownames(m6a_expression_df)
+
+# ─────────────────────────────────────────────────────
+# 3. Unir todo en un solo dataset
+# ─────────────────────────────────────────────────────
+model_data <- metadata %>%
+  inner_join(mutation_status, by = "Sample") %>%
+  inner_join(m6a_expression_df, by = "Sample")
+
+# Eliminar NAs
+model_data <- model_data %>% na.omit()
+
+# ─────────────────────────────────────────────────────
+# 4. Preparar variables
+# ─────────────────────────────────────────────────────
+# Variable de respuesta
+response <- model_data$response_TAC1
+
+# Variables predictoras (quitar columnas no numéricas excepto respuesta)
+predictors <- model_data %>%
+  dplyr::select(-Sample, -response_TAC1)
+
+# Asegurarse que respuesta es factor binario
+response <- factor(response, levels = c("non_responder", "responder"))
+
+# ─────────────────────────────────────────────────────
+# 5. Entrenar modelo Random Forest
+# ─────────────────────────────────────────────────────
+set.seed(123)
+rf_model <- randomForest(x = predictors, y = response, importance = TRUE, ntree = 500)
+
+# Ver resumen del modelo
+print(rf_model)
+
+# ─────────────────────────────────────────────────────
+# 6. Predicciones y AUC
+# ─────────────────────────────────────────────────────
+rf_probs <- predict(rf_model, type = "prob")[, 2]
+roc_obj <- roc(response, rf_probs)
+
+# AUC
+auc_val <- auc(roc_obj)
+print(paste("AUC:", round(auc_val, 3)))
+
+# ─────────────────────────────────────────────────────
+# 7. Visualizar curva ROC
+# ─────────────────────────────────────────────────────
+plot(roc_obj, col = "darkblue", lwd = 2, main = "ROC Curve - Random Forest")
+legend("bottomright", legend = paste("AUC =", round(auc_val, 3)), col = "darkblue", lwd = 2)
+
+```
+	
+	
+	
+```{r}
+# ───────────────────────────────────────────────────────────────
+# 1. Cargar librerías necesarias
+# ───────────────────────────────────────────────────────────────
+library(dplyr)
+library(randomForest)
+library(pROC)
+library(tibble)
+
+# ───────────────────────────────────────────────────────────────
+# 2. PREPARAR DATOS CLÍNICOS
+# ───────────────────────────────────────────────────────────────
+# Crear Sample limpio para hacer joins
+clinical_data <- clinical_data %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+         Sample = gsub("\\.tsv$", "", Sample)) %>%
+  mutate(smoking_status = ifelse(smoking_status == "" | is.na(smoking_status), "Unknown", smoking_status),
+         sex = ifelse(sex == "" | is.na(sex), "Unknown", sex)) %>%
+  mutate(smoking_status = factor(smoking_status),
+         sex = factor(sex))
+
+# Filtrar solo los pacientes que tengan respuesta (R o NR)
+metadata_model <- clinical_data %>%
+  filter(response_TAC1 %in% c("responder", "non_responder")) %>%
+  dplyr::select(Sample, response_TAC1, sex, smoking_status)
+
+# ───────────────────────────────────────────────────────────────
+# 3. EXPRESIÓN DE GENES m6A
+# ───────────────────────────────────────────────────────────────
+# Subconjunto de genes m6A presentes en rlog_mat
+genes_m6a_validos <- m6a_genes[m6a_genes %in% rownames(rlog_mat)]
+
+# Crear dataframe con expresión de genes m6A
+expression_df <- t(rlog_mat[genes_m6a_validos, ])
+expression_df <- as.data.frame(expression_df)
+expression_df$Sample <- rownames(expression_df)
+
+# ───────────────────────────────────────────────────────────────
+# 4. COMBINAR DATOS
+# ───────────────────────────────────────────────────────────────
+model_data <- metadata_model %>%
+  left_join(expression_df, by = "Sample") %>%
+  na.omit()  # quitar NAs si algún paciente no tiene expresión
+
+# ───────────────────────────────────────────────────────────────
+# 5. PREPARAR VARIABLES PARA RANDOM FOREST
+# ───────────────────────────────────────────────────────────────
+# Variable respuesta
+model_data$response <- factor(model_data$response_TAC1, levels = c("non_responder", "responder"))
+
+# Variables predictoras
+predictors <- model_data %>%
+  dplyr::select(-Sample, -response_TAC1, -response)
+
+# Convertir variables categóricas a dummy si es necesario
+predictors$sex <- as.factor(predictors$sex)
+predictors$smoking_status <- as.factor(predictors$smoking_status)
+
+# ───────────────────────────────────────────────────────────────
+# 6. RANDOM FOREST
+# ───────────────────────────────────────────────────────────────
+set.seed(123)
+rf_model <- randomForest(x = predictors, y = model_data$response, ntree = 500, importance = TRUE)
+
+# Resumen del modelo
+print(rf_model)
+
+# ───────────────────────────────────────────────────────────────
+# 7. PREDICCIONES Y AUC
+# ───────────────────────────────────────────────────────────────
+rf_probs <- predict(rf_model, type = "prob")[, 2]
+roc_obj <- roc(model_data$response, rf_probs)
+
+# AUC
+auc_val <- auc(roc_obj)
+cat("AUC:", round(auc_val, 3), "\n")
+
+# ───────────────────────────────────────────────────────────────
+# 8. CURVA ROC
+# ───────────────────────────────────────────────────────────────
+plot(roc_obj, col = "darkblue", lwd = 2, main = "ROC Curve - Random Forest (Todos los pacientes)")
+legend("bottomright", legend = paste("AUC =", round(auc_val, 3)), col = "darkblue", lwd = 2)
+
+```
+	
+	
+	
+```{r}
+# 1. Cargar clinical_data y normalizar Sample IDs
+clinical_data <- clinical_data %>%
+  mutate(Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+         Sample = gsub("\\.tsv$", "", Sample))
+
+# 2. Preparar metadata_model con clinical variables
+metadata_model <- clinical_data %>%
+  filter(response_TAC1 %in% c("responder", "non_responder")) %>%
+  mutate(
+    sex = factor(sex, levels = c("male", "female")),
+    smoking_status = na_if(smoking_status, "Unknown"),
+    response_TAC1 = factor(response_TAC1, levels = c("non_responder", "responder")),
+    Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+    Sample = gsub("\\.tsv$", "", Sample)
+  ) %>%
+  select(Sample, response_TAC1, sex, smoking_status)
+
+# 3. Preparar expresión normalizada de genes m6A
+expr_matrix <- as.data.frame(t(rlog_mat[rownames(rlog_mat) %in% m6a_genes, ]))
+expr_matrix$Sample <- rownames(expr_matrix)
+expression_df <- expr_matrix
+
+# 4. Preparar tabla de mutaciones por paciente (reader, writer, eraser)
+mutation_types_by_patient <- mutation_types_by_patient %>%
+  rownames_to_column("Sample")  # asegurarse de tener columna Sample
+
+# 5. Unir todas las fuentes
+model_data <- metadata_model %>%
+  left_join(mutation_types_by_patient, by = "Sample") %>%
+  left_join(expression_df, by = "Sample")
+
+# 6. Convertir columnas Reader, Writer, Eraser a variables numéricas (NA para no WES)
+model_data <- model_data %>%
+  mutate(
+    reader = ifelse(is.na(Reader), NA, as.numeric(Reader)),
+    writer = ifelse(is.na(Writer), NA, as.numeric(Writer)),
+    eraser = ifelse(is.na(Eraser), NA, as.numeric(Eraser))
+  ) %>%
+  select(-Reader, -Writer, -Eraser)
+
+
+# ───────────────────────────────────────────────────────────────
+# 6. RANDOM FOREST
+# ───────────────────────────────────────────────────────────────
+set.seed(123)
+rf_model <- randomForest(x = predictors, y = model_data$response, ntree = 500, importance = TRUE)
+
+# Resumen del modelo
+print(rf_model)
+
+# ───────────────────────────────────────────────────────────────
+# 7. PREDICCIONES Y AUC
+# ───────────────────────────────────────────────────────────────
+rf_probs <- predict(rf_model, type = "prob")[, 2]
+roc_obj <- roc(model_data$response, rf_probs)
+
+# AUC
+auc_val <- auc(roc_obj)
+cat("AUC:", round(auc_val, 3), "\n")
+
+# ───────────────────────────────────────────────────────────────
+# 8. CURVA ROC
+# ───────────────────────────────────────────────────────────────
+plot(roc_obj, col = "darkblue", lwd = 2, main = "ROC Curve - Random Forest (Todos los pacientes)")
+legend("bottomright", legend = paste("AUC =", round(auc_val, 3)), col = "darkblue", lwd = 2)
+
+
+```
+	
+**Lasso**	
+	
+	
+```{r}
+library(tidyverse)
+library(glmnet)
+library(data.table)
+library(readxl)
+library(pROC)
+
+library(caret)
+```
+```{r}
+# Expresión normalizada rlog_mat (código previo de DESeq2)
+
+# Cargar clinical data
+clinical_data_path <- "D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/20250228_DDBB_clinicos_RENAL_summarized.txt"
+clinical_data <- fread(clinical_data_path, sep = "\t", header = TRUE)
+
+# Crear columnas limpias
+clinical_data <- clinical_data %>%
+  mutate(
+    Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+    Sample = gsub("\\.tsv$", "", Sample)
+  )
+
+# Cargar mutational annotations (ya binarizados Writer, Reader, Eraser)
+mutation_types_by_patient <- read.table("D:/didic/Documents/Documentos/Master UOC/Cuatri 2/TFM/Mutation_type_annotation_binary.tsv", header = TRUE, sep = "\t")
+
+# Asegurar columna Sample
+mutation_types_by_patient$Sample <- rownames(mutation_types_by_patient)
+# Selección y limpieza
+metadata_model <- clinical_data %>%
+  filter(response_TAC1 %in% c("responder", "non_responder")) %>%
+  mutate(
+    response_TAC1 = factor(response_TAC1, levels = c("non_responder", "responder")),
+    sex = factor(sex, levels = c("male", "female")),
+    smoking_status = na_if(as.character(smoking_status), "Unknown"),
+    Sample = gsub("^htseq-RNA_FFPE_", "", sample_ID),
+    Sample = gsub("\\.tsv$", "", Sample)
+  ) %>%
+  dplyr::select(Sample, response_TAC1, sex, smoking_status)
+
+# Unir con mutaciones
+metadata_model <- metadata_model %>%
+  left_join(mutation_types_by_patient %>% dplyr::select(Sample, Writer, Reader, Eraser), by = "Sample")
+# Intersección de muestras
+common_samples <- intersect(colnames(rlog_mat), metadata_model$Sample)
+
+# Subset expresión
+expr_data <- t(rlog_mat[, common_samples])
+expr_data <- as.data.frame(expr_data)
+expr_data$Sample <- rownames(expr_data)
+
+# Unir todo
+full_data <- metadata_model %>%
+  filter(Sample %in% common_samples) %>%
+  left_join(expr_data, by = "Sample") %>%
+  drop_na()  # eliminar NA (smoking_status, mutaciones ausentes, etc.)
+# Variables
+X <- full_data %>%
+  dplyr::select(-Sample, -response_TAC1)
+
+# Convertir categóricas a dummies
+X_model <- model.matrix(~ ., data = X)[, -1]  # elimina intercepto
+
+# Respuesta binaria
+y <- as.numeric(full_data$response_TAC1) - 1  # 0 = non_responder, 1 = responder
+
+# Cross-validation LASSO
+set.seed(123)
+cv_lasso <- cv.glmnet(X_model, y, alpha = 1, family = "binomial")
+
+# Mejor lambda
+best_lambda <- cv_lasso$lambda.min
+
+# Modelo final
+lasso_model <- glmnet(X_model, y, alpha = 1, family = "binomial", lambda = best_lambda)
+
+# Mostrar coeficientes no nulos
+coef(lasso_model)[which(coef(lasso_model) != 0), ]
+# Predicciones
+pred_probs <- predict(lasso_model, newx = X_model, type = "response")
+pred_labels <- ifelse(pred_probs > 0.5, 1, 0)
+
+# Matriz de confusión
+confusionMatrix(factor(pred_labels), factor(y), positive = "1")
+
+# AUC
+roc_obj <- roc(y, as.vector(pred_probs))
+auc(roc_obj)
+
+# AUC plot
+plot(roc_obj, col = "blue", main = paste("AUC =", round(auc(roc_obj), 3)))
+
+```
+	
+	
+	
+	
+	
+	
+	
+	
+	
 	
 	
 	
